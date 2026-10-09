@@ -29,6 +29,7 @@ or agreed to a meeting/callback — AND was not irritated.
 Return ONLY JSON:
 {{"grade": "Fatal|Non-Fatal",
   "reason": "<one line, specific, names the turn where it went wrong>",
+  "evidence": "<the exact transcript line (quoted) that shows it>",
   "failure_turn": <int turn index or -1>,
   "confidence": <0-1>,
   "flags": [...],
@@ -37,8 +38,27 @@ Return ONLY JSON:
   "persona_needed": "<rushed|frustrated|confused|interested|language_hindi|language_english|none> — what the bot should have adapted to",
   "persona_switch_seen": true|false}}
 
+{examples}
 TRANSCRIPT (turns are numbered):
 {transcript}"""
+
+EXAMPLE = """HUMAN-GRADED EXAMPLES (learn the bar from these):
+{items}
+"""
+
+
+def fewshot(k=6):
+    """Human-labelled calls (dataset labels and dashboard overrides) as graded examples."""
+    rows = store.rows("""SELECT c.transcript, a.human_grade, a.reason FROM audit a JOIN call c ON c.id=a.call_id
+                         WHERE a.human_grade IS NOT NULL AND c.transcript<>'' ORDER BY a.graded_at DESC LIMIT ?""", (k,))
+    if not rows:
+        return ""
+    items = []
+    for r in rows:
+        t = r["transcript"].strip().splitlines()
+        snippet = "\n".join(t[:6]) + ("\n…" if len(t) > 6 else "")
+        items.append(f"--- {r['human_grade']}" + (f" ({r['reason']})" if r.get("reason") else "") + f"\n{snippet}")
+    return EXAMPLE.format(items="\n".join(items))
 
 
 def numbered(transcript):
@@ -46,15 +66,17 @@ def numbered(transcript):
     return "\n".join(f"[{i}] {l}" for i, l in enumerate(lines))
 
 
-def grade(call_id, transcript, model=config.GRADE_MODEL):
+def grade(call_id, transcript, model=config.GRADE_MODEL, use_examples=True):
     j, cost = llm.chat_json([{"role": "user", "content": PROMPT.format(
-        flags=", ".join(FLAGS), transcript=numbered(transcript)[:30000])}], model, max_tokens=800, label="grade: ")
+        flags=", ".join(FLAGS), examples=fewshot() if use_examples else "",
+        transcript=numbered(transcript)[:30000])}], model, max_tokens=1000, label="grade: ")
     flags = [f for f in (j.get("flags") or []) if f in FLAGS]
+    reason = (j.get("reason") or "") + (f' — "{j["evidence"][:160]}"' if j.get("evidence") else "")
     store.run("""INSERT OR REPLACE INTO audit (call_id, grade, reason, failure_turn, confidence, flags, sales_ready,
                  sales_reason, model, cost, graded_at, human_grade, cause_id)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,
                    (SELECT human_grade FROM audit WHERE call_id=?), (SELECT cause_id FROM audit WHERE call_id=?))""",
-              (call_id, j.get("grade"), j.get("reason"), int(j.get("failure_turn") or -1),
+              (call_id, j.get("grade"), reason, int(j.get("failure_turn") or -1),
                float(j.get("confidence") or 0), store.J(flags), 1 if j.get("sales_ready") else 0,
                j.get("sales_reason") or "", model, cost, store.now(), call_id, call_id))
     for f in flags:

@@ -80,10 +80,13 @@ async function propose(cid){toast('proposing…');const f=await post('/causes/'+
 async function recluster(){toast('clustering…');await post('/audit/cluster');toast('done');render()}
 
 async function fixes(){const r=await api('/fixes');return `<h2>Fixes</h2>${r.length?r.map(f=>{const m=JSON.parse(f.rationale||'{}');return `<div class="card"><div class="row"><b>${esc(f.cause||'')}</b><span class="pill ${f.status==='promoted'?'nf':f.status==='rejected'?'fatal':'sr'}">${f.status}</span><span class="pill">${m.kind||''}</span><span class="muted">${f.created}</span><span style="flex:1"></span>
+  ${m.kind==='prompt'&&f.status!=='rejected'?`<button class="btn sm" onclick="replay('${f.id}')">Replay failed calls</button>`:''}
   ${f.status==='proposed'?`<button class="btn p sm" onclick="approve('${f.id}')">Approve → test 10%</button><button class="btn sm" onclick="rejectf('${f.id}')">Reject</button>`:''}
   ${f.status==='testing'||f.status==='approved'?`<button class="btn p sm" onclick="promote('${f.id}')">Promote to all traffic</button>`:''}</div>
+  ${m.replay?`<div class="tiles" style="margin:8px 0"><div class="tile bad"><s>Before (fatal, this cause)</s><b>${Math.round(m.replay.before_rate*100)}%</b><s>${m.replay.before_fatal}/${m.replay.n} calls</s></div><div class="tile ok"><s>After replay with fix</s><b>${Math.round(m.replay.after_rate*100)}%</b><s>${m.replay.after_fatal}/${m.replay.n} · $${m.replay.cost}</s></div><div class="tile"><s>Tested at</s><b style="font-size:16px">${m.replay.at}</b></div></div>`:''}
   <div style="margin:6px 0"><b>${esc(m.summary||'')}</b><div class="muted">${esc(m.rationale||'')}</div><div class="muted">test: ${esc(m.test||'')}</div></div>
   <details open><summary class="muted">diff</summary><pre>${diffHtml(f.prompt_diff||'')}</pre></details></div>`}).join(''):'<div class="card muted">No fixes yet — propose one from a root cause.</div>'}`}
+async function replay(id){toast('replaying failed calls… ~1 min');await post('/fixes/'+id+'/replay?limit=10');toast('replay done');render()}
 async function approve(id){const r=await post('/fixes/'+id+'/approve',{share:0.1,window_min:120});toast('approved · experiment '+r.experiment);render()}
 async function rejectf(id){await post('/fixes/'+id+'/reject');toast('rejected');render()}
 async function promote(id){const r=await post('/fixes/'+id+'/promote');toast('promoted v'+r.version+(r.sarvam&&!r.sarvam.error?' · pushed to Sarvam':' · (Sarvam not configured)'));render()}

@@ -34,7 +34,7 @@ _Fill in as we go. The jury reads this with the demo video._
 - _…_
 
 ## Numbers we are proud of
-- Calls audited: 100% (vs ~3% sample)
+- Calls audited: 100% (vs ~3% sample) — on the 10 sample calls
 - Agreement with human auditors: κ = _…_ on n = _…_
 - Time from issue to tested fix: _…_ min
-- Failure-rate drop on the top cause: _…_
+- Failure-rate drop on the top cause (replay test, samples): 100% → 40% Fatal on 5 calls, $0.08, 1 minute after the fix was proposed

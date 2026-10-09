@@ -1,11 +1,20 @@
 """One thin door to the LiteLLM gateway. Every model call in CHEETAAAH goes
 through here so cost, retries and logging live in one place."""
+import hashlib
 import json
+import pathlib
 import time
 
 import requests
 
 import config
+
+CACHE = pathlib.Path(config.DATA) / "llm_cache"
+
+
+def _key(model, messages, max_tokens, temperature):
+    h = hashlib.sha256(json.dumps([model, messages, max_tokens, temperature], ensure_ascii=False).encode()).hexdigest()
+    return CACHE / f"{h[:24]}.json"
 
 requests.packages.urllib3.disable_warnings()
 
@@ -23,6 +32,10 @@ def chat(messages, model, *, json_mode=False, max_tokens=8000, temperature=0, la
          reasoning="none"):
     """Returns (text, cost_usd). Retries 429s with backoff; raises on other errors."""
     base, key = _creds()
+    ck = _key(model, messages, max_tokens, temperature)
+    if ck.exists():                                   # reruns cost nothing
+        j = json.loads(ck.read_text(encoding="utf-8"))
+        return j["text"], 0.0
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
             "messages": messages}
     if reasoning and ("anthropic" in model or "claude" in model):
@@ -56,6 +69,8 @@ def chat(messages, model, *, json_mode=False, max_tokens=8000, temperature=0, la
         return t2, cost + c2
     if not text:
         raise RuntimeError(f"empty completion (finish_reason={choice.get('finish_reason')})")
+    CACHE.mkdir(parents=True, exist_ok=True)
+    ck.write_text(json.dumps({"text": text, "cost": cost, "model": model}, ensure_ascii=False), encoding="utf-8")
     return text, cost
 
 

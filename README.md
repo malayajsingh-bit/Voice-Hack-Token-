@@ -63,4 +63,5 @@ sales-ready yield, cost per audited call.
 
 Expose the service for Sarvam tools: `cloudflared tunnel --url http://localhost:8800` and put the
 URL in `PUBLIC_URL`. On the sample calls: 10/10 audited, κ = 1.0 vs human labels, top cause named,
-fix proposed as a one-line prompt diff, $0.03 total.
+fix proposed as a one-line prompt diff; replaying the 5 failed calls against the fixed
+prompt drops Fatal from 100% to 40% in one minute. $0.12 total.

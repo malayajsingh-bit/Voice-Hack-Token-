@@ -24,6 +24,8 @@ import cluster as cl       # noqa: E402
 import experiment as ex    # noqa: E402
 import fix as fx           # noqa: E402
 import grade as gr         # noqa: E402
+import replay as rp        # noqa: E402
+import sync as sy          # noqa: E402
 
 app = FastAPI(title="Voice Bot Audit Loop")
 
@@ -213,6 +215,16 @@ async def approve(fid: str, req: Request):
     fx.approve(fid)
     eid = ex.start(fid, float(b.get("share", 0.1)), int(b.get("window_min", 120)))
     return {"ok": True, "experiment": eid}
+
+
+@app.post("/fixes/{fid}/replay")
+def replay_fix(fid: str, limit: int = 10):
+    return rp.run(fid, limit)
+
+
+@app.post("/calls/sync")
+def calls_sync(hours: int = 24):
+    return {"synced": sy.sync(hours)}
 
 
 @app.post("/fixes/{fid}/reject")
