@@ -41,6 +41,23 @@ def crore(v):
     return f"{v:,.0f}"
 
 
+def spoken(v):
+    """Amounts the voice cannot misread: '5 crore 21 lakh', never '5.2 Cr'
+    (the model voiced 5.2 Cr as 'saadhe paanch crore' in testing)."""
+    v = int(round(float(v or 0)))
+    cr, rest = divmod(v, 10_000_000)
+    lk, rest = divmod(rest, 100_000)
+    th = rest // 1000
+    parts = []
+    if cr:
+        parts.append(f"{cr} crore")
+    if lk:
+        parts.append(f"{lk} lakh")
+    if not cr and th:
+        parts.append(f"{th} hazaar")
+    return " ".join(parts) or f"{v}"
+
+
 def demand_pitch(raw):
     """Numbers the bot may quote in the pre-sales state. Computed, not improvised."""
     ind = raw.get("india") or {}
@@ -57,9 +74,9 @@ def demand_pitch(raw):
             "weekly_buyleads": weekly, "close_rate": close,
             "monthly_est": monthly_est, "monthly_est_h": crore(monthly_est),
             "line": (f"Aapki category mein har mahine {buyers:,} buyers aate hain, "
-                     f"₹{crore(value)} ka business. Average order ₹{aov:,.0f}. "
-                     f"{weekly} BuyLeads/week par 10 mein se 1 bhi close ho toh "
-                     f"₹{crore(monthly_est)} mahine ka extra business.")}
+                     f"{spoken(value)} rupaye ka business. Average order {spoken(aov)} rupaye. "
+                     f"{weekly} BuyLeads har hafte par 10 mein se 1 bhi close ho toh "
+                     f"{spoken(monthly_est)} rupaye mahine ka extra business.")}
 
 
 PERSONA_PROMPT = """You design the voice persona for ONE outbound sales call to an Indian MSME seller.
@@ -129,7 +146,9 @@ def variables(glid):
     """What is passed to Sarvam when the call starts. Kept under ~1 KB."""
     c = build(glid)
     p = c["persona"]
-    return {"glid": str(glid), "seller_md": c["seller_md"],
+    raw = store.L(store.one("SELECT raw FROM seller_ctx WHERE glid=?", (str(glid),))["raw"], {})
+    return {"glid": str(glid), "seller_name": raw.get("company_name") or f"Seller {glid}",
+            "seller_md": c["seller_md"],
             "persona": f"language={p.get('language')}; formality={p.get('formality')}; pace={p.get('pace')}; "
                        f"warmth={p.get('warmth')}; opening={p.get('opening')}",
             "playbook": "; ".join(f"{k}: {v}" for k, v in (p.get("playbook") or {}).items()),

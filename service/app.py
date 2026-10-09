@@ -28,6 +28,21 @@ import replay as rp        # noqa: E402
 import sync as sy          # noqa: E402
 
 app = FastAPI(title="Voice Bot Audit Loop")
+TOOL_KEY = config._env("TOOL_KEY")
+
+
+@app.middleware("http")
+async def _guard(request, call_next):
+    """Requests arriving through the public tunnel carry cf-connecting-ip. They may reach
+    only the in-call tools and the post-call webhook, and only with the shared key.
+    Everything else (dashboard, approve, promote) stays local."""
+    if request.headers.get("cf-connecting-ip"):
+        p = request.url.path
+        if not (p.startswith("/tools/") or p == "/calls/ingest"):
+            return JSONResponse({"error": "not available remotely"}, status_code=403)
+        if TOOL_KEY and request.headers.get("x-tool-key") != TOOL_KEY:
+            return JSONResponse({"error": "bad key"}, status_code=401)
+    return await call_next(request)
 
 
 # ------------------------------------------------------------ pre-call -----
