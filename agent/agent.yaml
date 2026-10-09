@@ -1,0 +1,40 @@
+# Versioned definition of the Sarvam agent. deploy.py reads this and the prompt file.
+# Field names mirror what the Sarvam Conversations console exposes (states, tools, variables);
+# confirm exact API keys with the Sarvam desk on Day 1 and adjust deploy.py only.
+name: im-seller-outbound
+language: hi-IN            # Hinglish; STT code-mixed
+voice:
+  model: bulbul
+  speaker: from_persona    # deploy.py maps persona.voice -> a Bulbul speaker id
+stt:
+  model: saaras
+llm:
+  model: sarvam-m          # or the gateway model if Sarvam allows BYO
+prompt_file: prompt.md
+variables: [glid, seller_md, persona, playbook, avoid, hook, prompt_override]
+
+states:
+  - name: open
+    transitions: [discover, close]
+  - name: discover
+    tools: [get_seller_context, set_persona, flag_sales_ready, flag_risk]
+    transitions: [objection, presales, close, human]
+  - name: objection
+    tools: [set_persona, flag_sales_ready, book_callback, flag_risk]
+    transitions: [discover, presales, close, human]
+  - name: presales
+    tools: [get_demand_pitch, book_callback, set_persona, flag_risk]
+    transitions: [close, human]
+  - name: close
+    terminal: true
+  - name: human
+    action: transfer
+    terminal: true
+
+tools_from: service   # GET {PUBLIC_URL}/tools/definitions
+
+guardrails:
+  max_turns: 40
+  max_minutes: 8
+  transfer_on: [human_request, two_risk_flags]
+  never: [invent numbers, repeat a line twice, pitch after a clear no]

@@ -1,0 +1,7 @@
+{
+ "id": "c010",
+ "glid": null,
+ "transcript": "Bot: Namaste, Khan Electricals se baat ho rahi hai?\nSeller: Haan, par abhi busy hoon, baad mein.\nBot: Sir sirf do minute, TrustSEAL plan ke baare mein...\nSeller: Bola na busy hoon.\nBot: Ji sir, plan 60,000 ka hai aur usme...\nSeller: [call ended]",
+ "human_grade": "Fatal",
+ "source": "sample"
+}

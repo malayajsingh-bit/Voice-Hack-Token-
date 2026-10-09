@@ -51,9 +51,16 @@ sales-ready yield, cost per audited call.
 - Only the call variables leave our side; transcripts and recordings are audited here.
 - All code written during the two days. Claude Code is used as a tool and recorded in `skills.md`.
 
-## Run (will fill in as parts land)
+## Run
 
     pip install -r requirements.txt
-    python3 service/app.py        # http://localhost:8800
+    cp .env.example .env            # fill LLM_BASE_URL, LLM_API_KEY, SARVAM_API_KEY, PUBLIC_URL
+    python3 audit/run.py import audit/samples     # or data/calls/ with the hackathon dataset
+    python3 audit/run.py grade                    # grade every call; prints agreement with human labels
+    python3 audit/run.py cluster                  # root causes, ranked
+    python3 service/app.py                        # http://localhost:8800 — dashboard + tools + ingest
+    python3 agent/deploy.py --dry                 # agent payload for Sarvam (set keys to deploy)
 
-Credentials go in `.env` (git-ignored): `SARVAM_API_KEY`, `LLM_BASE_URL`, `LLM_API_KEY`.
+Expose the service for Sarvam tools: `cloudflared tunnel --url http://localhost:8800` and put the
+URL in `PUBLIC_URL`. On the sample calls: 10/10 audited, κ = 1.0 vs human labels, top cause named,
+fix proposed as a one-line prompt diff, $0.03 total.
