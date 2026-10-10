@@ -1,6 +1,7 @@
 # The live Sarvam agent
 
 - **Agent**: `IndiaMART Seller Growth Call` · app id `IndiaMART-S-31ca33eb-e1ce` · committed version 1
+- **Deployed prompt**: `agent/sarvam_prompt.md` (the live single-state instructions; `prompt.md` is the original local draft)
 - **Voice**: Sarika (conversational Hindi female, Sarvam TTS v4) · languages Hindi + English
 - **Workspace constraint**: one state only, so the five phases (open, discover, objection, pre-sales, close)
   are sections of one prompt; pre-sales is gated by the `flag_sales_ready` tool and the `sales_stage` variable.
