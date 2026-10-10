@@ -4,3 +4,5 @@ requests
 pyyaml
 scikit-learn
 numpy
+pytest
+httpx

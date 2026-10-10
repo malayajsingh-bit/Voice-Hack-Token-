@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS prompt_version (id TEXT PRIMARY KEY, version INTEGER,
 CREATE TABLE IF NOT EXISTS call_situation (call_id TEXT, situation TEXT, PRIMARY KEY (call_id, situation));
 CREATE TABLE IF NOT EXISTS seller_fact (id TEXT PRIMARY KEY, glid TEXT, kind TEXT, fact TEXT, quote TEXT,
   call_id TEXT, check_data INTEGER DEFAULT 0, removed INTEGER DEFAULT 0, created TEXT);
+CREATE TABLE IF NOT EXISTS tool_log (id TEXT PRIMARY KEY, call_id TEXT, glid TEXT, tool TEXT,
+  request TEXT, response TEXT, status TEXT, created TEXT);
+CREATE INDEX IF NOT EXISTS tool_log_glid_t ON tool_log(glid, created);
 CREATE TABLE IF NOT EXISTS seller_category (key TEXT PRIMARY KEY, label TEXT, source TEXT, created TEXT);
 CREATE TABLE IF NOT EXISTS seller_category_map (glid TEXT PRIMARY KEY, category TEXT, assigned TEXT);
 CREATE TABLE IF NOT EXISTS category_playbook (category TEXT PRIMARY KEY, text TEXT, fix_id TEXT, updated TEXT);
@@ -127,3 +130,25 @@ def L(s, default=None):
         return json.loads(s) if s else (default if default is not None else [])
     except Exception:
         return default if default is not None else []
+
+
+def tool_calls_for(call_id, before_s=60, after_s=120):
+    """Tool calls that belong to one call. Sarvam's tools send the seller's GLID but not our
+    call id, so a tool call is matched by call id when present, else by GLID and time: from
+    shortly before the call started to shortly after it ended."""
+    import datetime as _dt
+    c = one("SELECT glid, started, duration FROM call WHERE id=?", (call_id,))
+    if not c:
+        return []
+    byid = rows("SELECT * FROM tool_log WHERE call_id=? ORDER BY created", (call_id,))
+    if byid or not c.get("glid") or not c.get("started"):
+        return byid
+    fmt = "%Y-%m-%d %H:%M:%S"
+    try:
+        start = _dt.datetime.strptime(str(c["started"])[:19], fmt)
+    except ValueError:
+        return []
+    lo = (start - _dt.timedelta(seconds=before_s)).strftime(fmt)
+    hi = (start + _dt.timedelta(seconds=float(c.get("duration") or 600) + after_s)).strftime(fmt)
+    return rows("SELECT * FROM tool_log WHERE glid=? AND created BETWEEN ? AND ? ORDER BY created",
+                (str(c["glid"]), lo, hi))

@@ -45,6 +45,23 @@ async def _guard(request, call_next):
     return await call_next(request)
 
 
+async def _tool(req: Request, name: str, handler):
+    """Runs one /tools/* handler and stores the request and the response, so a call's audit
+    can see exactly what each tool returned."""
+    b = await req.json()
+    status, resp = "ok", None
+    try:
+        resp = handler(b)
+        return resp
+    except Exception as e:
+        status, resp = "error", {"error": str(e)[:200]}
+        raise
+    finally:
+        store.run("INSERT INTO tool_log VALUES (?,?,?,?,?,?,?,?)",
+                  (store.nid(), str(b.get("call_id") or ""), str(b.get("glid") or ""), name,
+                   store.J(b), store.J(resp), status, store.now()))
+
+
 # ------------------------------------------------------------ pre-call -----
 @app.get("/context/{glid}")
 def get_context(glid: str, force: bool = False):
@@ -81,39 +98,40 @@ async def start_call(req: Request):
 # ------------------------------------------------------------ in-call ------
 @app.post("/tools/get_seller_context")
 async def t_ctx(req: Request):
-    b = await req.json()
-    c = context.build(str(b.get("glid")))
-    return {"seller_md": c["seller_md"], "persona": c["persona"], "hook": c["demand"]["line"]}
+    def h(b):
+        c = context.build(str(b.get("glid")))
+        return {"seller_md": c["seller_md"], "persona": c["persona"], "hook": (c.get("demand") or {}).get("line", "")}
+    return await _tool(req, "get_seller_context", h)
 
 
 @app.post("/tools/set_persona")
 async def t_persona(req: Request):
-    b = await req.json()
-    return tools.set_persona(b.get("glid"), b.get("call_id"), b.get("signal"), b.get("note", ""))
+    return await _tool(req, "set_persona",
+                       lambda b: tools.set_persona(b.get("glid"), b.get("call_id"), b.get("signal"), b.get("note", "")))
 
 
 @app.post("/tools/flag_sales_ready")
 async def t_sales(req: Request):
-    b = await req.json()
-    return tools.flag_sales_ready(b.get("glid"), b.get("call_id"), b.get("reason", ""), b.get("confidence", 0.7))
+    return await _tool(req, "flag_sales_ready",
+                       lambda b: tools.flag_sales_ready(b.get("glid"), b.get("call_id"),
+                                                        b.get("reason", ""), b.get("confidence", 0.7)))
 
 
 @app.post("/tools/get_demand_pitch")
 async def t_pitch(req: Request):
-    b = await req.json()
-    return tools.get_demand_pitch(b.get("glid"))
+    return await _tool(req, "get_demand_pitch", lambda b: tools.get_demand_pitch(b.get("glid")))
 
 
 @app.post("/tools/book_callback")
 async def t_cb(req: Request):
-    b = await req.json()
-    return tools.book_callback(b.get("glid"), b.get("call_id"), b.get("when", ""), b.get("note", ""))
+    return await _tool(req, "book_callback",
+                       lambda b: tools.book_callback(b.get("glid"), b.get("call_id"), b.get("when", ""), b.get("note", "")))
 
 
 @app.post("/tools/flag_risk")
 async def t_risk(req: Request):
-    b = await req.json()
-    return tools.flag_risk(b.get("glid"), b.get("call_id"), b.get("kind", ""), b.get("note", ""))
+    return await _tool(req, "flag_risk",
+                       lambda b: tools.flag_risk(b.get("glid"), b.get("call_id"), b.get("kind", ""), b.get("note", "")))
 
 
 @app.get("/tools/definitions")
@@ -188,6 +206,9 @@ def call(cid: str):
         raise HTTPException(404)
     c["audit"] = store.one("SELECT * FROM audit WHERE call_id=?", (cid,))
     c["switches"] = store.rows("SELECT * FROM switch_log WHERE call_id=? ORDER BY t", (cid,))
+    c["tools"] = [{"tool": t["tool"], "at": t["created"], "status": t["status"],
+                   "request": store.L(t["request"], {}), "response": store.L(t["response"], {})}
+                  for t in store.tool_calls_for(cid)]
     return c
 
 

@@ -156,30 +156,36 @@ def build(glid, force=False):
     row = store.one("SELECT * FROM seller_ctx WHERE glid=?", (str(glid),))
     if row and not force:
         return {"glid": str(glid), "seller_md": row["seller_md"], "persona": store.L(row["persona"], {}),
-                "demand": store.L(row["demand"], {}), "built_at": row["built_at"]}
+                "demand": store.L(row["demand"], {}), "raw": store.L(row["raw"], {}), "built_at": row["built_at"]}
     raw = load_raw(glid)
     md = seller_md(raw)
     demand = demand_pitch(raw)
+    persona_failed = False
     try:
         persona, _ = llm.chat_json([{"role": "user", "content": PERSONA_PROMPT.format(
             raw=json.dumps({k: v for k, v in raw.items() if k not in ("demand",)}, ensure_ascii=False)[:6000])}],
             config.FIX_MODEL, max_tokens=3000, label="persona: ")
     except Exception as e:
+        persona_failed = True
         persona = {"language": "hinglish-hindi-leaning", "formality": "respectful-informal", "pace": "medium",
                    "warmth": "high", "voice": {"gender": "female", "accent": "neutral"},
                    "opening": f"Namaste, {raw.get('company_name')} se baat ho rahi hai?", "playbook": {},
                    "avoid": [], "why": f"default persona ({str(e)[:80]})"}
-    store.run("INSERT OR REPLACE INTO seller_ctx VALUES (?,?,?,?,?,?)",
-              (str(glid), md, store.J(persona), store.J(demand), store.J(raw), store.now()))
-    assign_category(glid, raw)
-    return {"glid": str(glid), "seller_md": md, "persona": persona, "demand": demand, "built_at": store.now()}
+    # Cache only a real persona. A fallback from a passing LLM error (an expired key, a timeout)
+    # would otherwise stick to this seller for good; the next call retries instead.
+    if not persona_failed:
+        store.run("INSERT OR REPLACE INTO seller_ctx VALUES (?,?,?,?,?,?)",
+                  (str(glid), md, store.J(persona), store.J(demand), store.J(raw), store.now()))
+        assign_category(glid, raw)
+    return {"glid": str(glid), "seller_md": md, "persona": persona, "demand": demand, "raw": raw,
+            "built_at": store.now()}
 
 
 def variables(glid):
     """What is passed to Sarvam when the call starts. Kept under ~1 KB."""
     c = build(glid)
     p = c["persona"]
-    raw = store.L(store.one("SELECT raw FROM seller_ctx WHERE glid=?", (str(glid),))["raw"], {})
+    raw = c.get("raw") or {}
     # Level 3: what this seller told us on earlier calls
     facts = store.rows("SELECT fact FROM seller_fact WHERE glid=? AND removed=0 ORDER BY created DESC LIMIT 6",
                        (str(glid),))
