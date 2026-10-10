@@ -10,7 +10,7 @@ import llm      # noqa: E402
 import store    # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-PROMPT_FILE = ROOT / "agent" / "prompt.md"
+PROMPT_FILE = ROOT / "agent" / "sarvam_prompt.md"   # the prompt deployed on Sarvam
 
 FIX_PROMPT = """You maintain the system prompt of an outbound sales Voice Bot (Hinglish, Indian MSME sellers).
 An audit found this ROOT CAUSE of failed calls:

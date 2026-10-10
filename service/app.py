@@ -224,6 +224,55 @@ def fixes():
     return store.rows("SELECT f.*, rc.name AS cause FROM fix f LEFT JOIN root_cause rc ON rc.id=f.cause_id ORDER BY f.created DESC")
 
 
+STAGES = ["Proposed", "Tested", "Approved", "Live"]
+
+
+def _card(f):
+    """Everything one approval card shows, already reduced to what a person reads."""
+    m = store.L(f["rationale"], {})
+    rc = store.one("SELECT * FROM root_cause WHERE id=?", (f["cause_id"],)) or {}
+    ex_row = store.one("SELECT reason FROM audit WHERE cause_id=? AND reason LIKE '%—%' LIMIT 1", (f["cause_id"],))
+    quote = ""
+    if ex_row and '"' in ex_row["reason"]:
+        quote = ex_row["reason"].split('"', 1)[1].rsplit('"', 1)[0][:180]
+    lines = [l for l in (f["prompt_diff"] or "").splitlines()
+             if (l.startswith("+") or l.startswith("-")) and not l.startswith(("+++", "---"))]
+    rp_ = m.get("replay") or {}
+    stage = {"proposed": 1 if rp_ else 0, "approved": 2, "testing": 2, "promoted": 3}.get(f["status"], 0)
+    if f["status"] == "promoted" and not m.get("sarvam_pushed"):
+        stage = 2.5
+    return {"id": f["id"], "status": f["status"], "stage": stage,
+            "problem": rc.get("name") or "Unnamed issue", "calls": rc.get("count") or 0,
+            "fatal": rc.get("fatal_count") or 0,
+            "what_changes": (m.get("summary") or "").split("\n")[0].split(". ")[0].rstrip(".") + ".",
+            "kind": m.get("kind"), "removed": [l[1:].strip() for l in lines if l.startswith("-")],
+            "added": [l[1:].strip() for l in lines if l.startswith("+")],
+            "why": (m.get("rationale") or "")[:300], "quote": quote,
+            "before": rp_.get("before_rate"), "after": rp_.get("after_rate"), "tested_on": rp_.get("n"),
+            "sarvam_pushed": bool(m.get("sarvam_pushed")), "created": f["created"]}
+
+
+@app.get("/approvals")
+def approvals():
+    fx_rows = store.rows("SELECT * FROM fix ORDER BY created DESC")
+    cards = [_card(f) for f in fx_rows if f["status"] != "rejected"]
+    with_fix = {f["cause_id"] for f in fx_rows if f["status"] != "rejected"}
+    open_causes = [{"id": c["id"], "problem": c["name"], "calls": c["count"], "fatal": c["fatal_count"]}
+                   for c in cl.ranked() if c["id"] not in with_fix]
+    return {"waiting": [c for c in cards if c["stage"] < 3], "live": [c for c in cards if c["stage"] >= 3],
+            "no_fix_yet": open_causes, "stages": STAGES}
+
+
+@app.post("/fixes/{fid}/mark_pushed")
+def mark_pushed(fid: str):
+    """Recorded once the approved prompt is on the Sarvam agent (pushed via MCP today)."""
+    f = store.one("SELECT rationale FROM fix WHERE id=?", (fid,))
+    m = store.L(f["rationale"], {})
+    m["sarvam_pushed"] = store.now()
+    store.run("UPDATE fix SET rationale=? WHERE id=?", (store.J(m), fid))
+    return {"ok": True}
+
+
 @app.post("/fixes/{fid}/approve")
 async def approve(fid: str, req: Request):
     b = await req.json() if await req.body() else {}
@@ -251,13 +300,9 @@ def reject(fid: str):
 @app.post("/fixes/{fid}/promote")
 def promote(fid: str):
     r = fx.promote(fid)
-    pushed = None
-    if config.SARVAM_API_KEY and config.SARVAM_AGENT_ID:
-        try:
-            pushed = sarvam.update_agent(config.SARVAM_AGENT_ID, prompt=fx.current_prompt())
-        except Exception as e:
-            pushed = {"error": str(e)[:200]}
-    return {"ok": True, **r, "sarvam": pushed}
+    # Sarvam has no documented REST call for editing an agent's prompt; the new version is
+    # pushed with the MCP (configure_agent + commit), then /fixes/{id}/mark_pushed records it.
+    return {"ok": True, **r, "sarvam": "waiting to be pushed"}
 
 
 @app.get("/experiments")

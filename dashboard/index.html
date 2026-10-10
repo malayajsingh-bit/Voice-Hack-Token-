@@ -33,6 +33,35 @@ pre .add{color:var(--ok)}pre .del{color:var(--bad)}
 .trail span.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 16px;border-radius:10px;opacity:0;transition:.2s;font-weight:600}.toast.on{opacity:1}
 .t{white-space:pre-wrap;font-size:13px;line-height:1.5;background:#FAFBFA;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:360px;overflow:auto}
+
+/* ---- approval page ---- */
+.ap-head{display:flex;align-items:baseline;gap:14px;margin:6px 0 18px;flex-wrap:wrap}
+.ap-head h1{font-size:26px;margin:0}.ap-head .n{font-size:26px;font-weight:700;color:var(--accent)}
+.ap-head .sub{color:var(--mute);font-size:14px}
+.ap{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:14px}
+.ap .top{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.ap h3{font-size:18px;margin:0;color:var(--ink);flex:1;min-width:260px;line-height:1.35}
+.ap .meta{display:flex;gap:6px;flex-wrap:wrap}
+.ap .chg{font-size:15px;margin:10px 0 0;color:var(--ink2)}
+.steps4{display:flex;gap:0;margin:14px 0 4px}
+.steps4 span{flex:1;font-size:12px;color:var(--mute);padding-top:8px;border-top:4px solid var(--line);text-align:left}
+.steps4 span.done{border-color:var(--accent);color:var(--accent);font-weight:600}
+.steps4 span.now{border-color:#B7791F;color:#B7791F;font-weight:600}
+.res{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0 0}
+.res div{background:var(--soft);border-radius:10px;padding:10px 14px}
+.res b{display:block;font-size:28px;line-height:1.1}.res s{text-decoration:none;font-size:12.5px;color:var(--mute)}
+.res .bad b{color:var(--bad)}.res .good b{color:var(--ok)}
+.acts{display:flex;gap:10px;margin-top:16px;align-items:center;flex-wrap:wrap}
+.btn.big{font-size:15px;padding:11px 20px}
+.more{margin-top:12px}.more summary{cursor:pointer;color:var(--mute);font-size:13px}
+.lines{font-family:var(--mono);font-size:12.5px;margin:8px 0 0;border-radius:8px;overflow:hidden}
+.lines div{padding:5px 10px;white-space:pre-wrap}
+.lines .rm{background:#FBE9E9;color:#8A2A2A}.lines .ad{background:#E3F4EA;color:#1F5E3A}
+.quote{border-left:3px solid var(--line);padding:4px 10px;color:var(--ink2);font-size:13.5px;margin:8px 0 0}
+.ghost{background:none;border:1px dashed var(--line);border-radius:14px;padding:14px 18px;margin-bottom:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.ghost b{flex:1;font-weight:500}
+.sec-t{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);margin:26px 0 10px}
+.empty{color:var(--mute);padding:18px;text-align:center;border:1px dashed var(--line);border-radius:14px}
 </style></head><body>
 <header><b>Voice Bot Audit Loop</b><nav id="nav"></nav><span class="r" id="hdr"></span></header>
 <main id="m"></main><div class="toast" id="toast"></div>
@@ -41,7 +70,7 @@ const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"]/
 async function api(p,o){const r=await fetch(p,o);if(!r.ok)throw new Error(await r.text());return r.json()}
 const post=(p,b)=>api(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});
 function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),1800)}
-const VIEWS=['overview','calls','causes','fixes','experiments','queues','prompt'];let view=location.hash.slice(2)||'overview';
+const VIEWS=['approve','overview','calls','causes','experiments','queues','prompt'];let view=location.hash.slice(2)||'approve';if(view==='fixes')view='approve';
 function nav(){$('#nav').innerHTML=VIEWS.map(v=>`<a href="#/${v}" class="${v===view?'on':''}">${v}</a>`).join('')}
 const grade=g=>g==='Fatal'?'<span class="pill fatal">Fatal</span>':g==='Non-Fatal'?'<span class="pill nf">Non-Fatal</span>':'<span class="pill">—</span>';
 const diffHtml=d=>esc(d).split('\n').map(l=>l.startsWith('+')&&!l.startsWith('+++')?`<span class="add">${l}</span>`:l.startsWith('-')&&!l.startsWith('---')?`<span class="del">${l}</span>`:l).join('\n');
@@ -106,6 +135,37 @@ async function handle(id){await post('/queue/'+id+'/handle');render()}
 
 async function prompt(){const r=await api('/prompt');return `<h2>Agent prompt</h2><div class="card"><div class="muted">versions: ${r.versions.map(v=>`v${v.version}${v.active?' (active)':''}`).join(', ')||'file only'}</div><pre>${esc(r.prompt)}</pre></div>`}
 
-async function render(){nav();$('#hdr').textContent=new Date().toLocaleTimeString();try{$('#m').innerHTML=await ({overview,calls,causes,fixes,experiments,queues,prompt})[view]()}catch(e){$('#m').innerHTML=`<div class="card">${esc(e.message)}</div>`}}
+
+async function approve(){const r=await api('/approvals');const W=r.waiting,L=r.live,N=r.no_fix_yet,S=r.stages;
+  const pct=v=>v==null?'—':Math.round(v*100)+'%';
+  const stepper=st=>`<div class="steps4">${S.map((s,i)=>`<span class="${i<=Math.floor(st)?'done':(i===Math.floor(st)+1?'now':'')}">${s}${i===3&&st===2.5?' · push pending':''}</span>`).join('')}</div>`;
+  const action=c=>{
+    if(c.stage===0)return `<button class="btn p big" onclick="apTest('${c.id}')">Test this fix</button>`;
+    if(c.stage===1)return `<button class="btn p big" onclick="apOk('${c.id}')">Approve</button>`;
+    if(c.stage===2)return `<button class="btn p big" onclick="apLive('${c.id}')">Make live</button>`;
+    if(c.stage===2.5)return `<span class="pill w">Approved · waiting to be pushed to Sarvam</span>`;
+    return '';};
+  const card=c=>`<div class="ap">
+    <div class="top"><h3>${esc(c.problem)}</h3><div class="meta">${c.fatal?`<span class="pill fatal">${c.fatal} failed call${c.fatal>1?'s':''}</span>`:''}<span class="pill">whole bot</span></div></div>
+    <div class="chg"><b>Fix:</b> ${esc(c.what_changes)}</div>
+    ${c.before!=null?`<div class="res"><div class="bad"><s>Failing now</s><b>${pct(c.before)}</b></div><div class="good"><s>Failing with fix · tested on ${c.tested_on} calls</s><b>${pct(c.after)}</b></div></div>`:''}
+    ${stepper(c.stage)}
+    <div class="acts">${action(c)}${c.stage<3&&c.stage!==2.5?`<button class="btn big" onclick="apNo('${c.id}')">Reject</button>`:''}</div>
+    <details class="more"><summary>Details</summary>
+      ${c.removed.length||c.added.length?`<div class="lines">${c.removed.map(l=>`<div class="rm">− ${esc(l)}</div>`).join('')}${c.added.map(l=>`<div class="ad">+ ${esc(l)}</div>`).join('')}</div>`:'<div class="muted">Not a prompt change: '+esc(c.kind||'')+'</div>'}
+      ${c.quote?`<div class="quote">From a real call: “${esc(c.quote)}”</div>`:''}
+      ${c.why?`<div class="muted" style="margin-top:8px">${esc(c.why)}</div>`:''}
+    </details></div>`;
+  return `<div class="ap-head"><span class="n">${W.length}</span><h1>fix${W.length===1?'':'es'} waiting for you</h1><span class="sub">Approve only what you would say yourself on a call.</span></div>
+    ${W.length?W.map(card).join(''):'<div class="empty">Nothing to approve right now.</div>'}
+    ${N.length?`<div class="sec-t">Problems without a fix yet</div>${N.map(c=>`<div class="ghost"><b>${esc(c.problem)}</b><span class="pill fatal">${c.fatal} failed</span><button class="btn" onclick="apPropose('${c.id}',this)">Suggest a fix</button></div>`).join('')}`:''}
+    ${L.length?`<div class="sec-t">Live on Sarvam</div>${L.map(card).join('')}`:''}`}
+async function apTest(id){toast('Testing on the failed calls… about a minute');await post('/fixes/'+id+'/replay?limit=5');toast('Tested');render()}
+async function apOk(id){await post('/fixes/'+id+'/approve',{share:0.1});toast('Approved');render()}
+async function apLive(id){await post('/fixes/'+id+'/promote');toast('Marked live · push to Sarvam pending');render()}
+async function apNo(id){await post('/fixes/'+id+'/reject');toast('Rejected');render()}
+async function apPropose(cid,b){b.disabled=true;b.textContent='Writing fix…';await post('/causes/'+cid+'/propose');toast('Fix ready');render()}
+
+async function render(){nav();$('#hdr').textContent=new Date().toLocaleTimeString();try{$('#m').innerHTML=await ({approve,overview,calls,causes,fixes,experiments,queues,prompt})[view]()}catch(e){$('#m').innerHTML=`<div class="card">${esc(e.message)}</div>`}}
 addEventListener('hashchange',()=>{view=location.hash.slice(2)||'overview';render()});render();setInterval(()=>{if(view==='overview'||view==='experiments')render()},15000);
 </script></body></html>
