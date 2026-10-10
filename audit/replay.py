@@ -61,15 +61,25 @@ def replay_one(transcript, prompt):
 def run(fix_id, limit=10):
     f = store.one("SELECT * FROM fix WHERE id=?", (fix_id,))
     meta = store.L(f["rationale"], {})
-    if not meta.get("new_prompt"):
-        raise ValueError("fix has no new prompt to replay against")
-    calls = store.rows("""SELECT c.id, c.transcript FROM audit a JOIN call c ON c.id=a.call_id
-                          WHERE a.cause_id=? AND a.grade='Fatal' LIMIT ?""", (f["cause_id"], limit))
+    import fix as fx
+    if meta.get("kind") == "category_playbook":
+        prompt_b = fx.current_prompt() + "\n\n## Seller category playbook\n" + meta.get("playbook", "")
+    elif meta.get("new_prompt"):
+        prompt_b = meta["new_prompt"]
+    else:
+        raise ValueError("fix has nothing to replay against")
+    rc = store.one("SELECT level, examples FROM root_cause WHERE id=?", (f["cause_id"],)) or {}
+    if (rc.get("level") or 1) == 2:
+        ids = store.L(rc.get("examples"))[:limit]
+        calls = [c for c in (store.one("SELECT id, transcript FROM call WHERE id=?", (i,)) for i in ids) if c]
+    else:
+        calls = store.rows("""SELECT c.id, c.transcript FROM audit a JOIN call c ON c.id=a.call_id
+                              WHERE a.cause_id=? AND a.grade='Fatal' LIMIT ?""", (f["cause_id"], limit))
     before = len(calls)
     after_fatal, cost, results = 0, 0.0, []
     for c in calls:
-        new_t, rc = replay_one(c["transcript"], meta["new_prompt"])
-        cost += rc
+        new_t, rcost = replay_one(c["transcript"], prompt_b)
+        cost += rcost
         rid = f"replay-{fix_id}-{c['id']}"
         store.run("INSERT OR REPLACE INTO call VALUES (?,?,?,?,?,?,?,?,?,?)",
                   (rid, None, "replay", store.now(), None, new_t, None, "B", store.J({"fix": fix_id, "orig": c["id"]}), store.now()))

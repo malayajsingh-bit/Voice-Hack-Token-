@@ -36,7 +36,19 @@ Return ONLY JSON:
   "sales_ready": true|false,
   "sales_reason": "<one line or empty>",
   "persona_needed": "<rushed|frustrated|confused|interested|language_hindi|language_english|none> — what the bot should have adapted to",
-  "persona_switch_seen": true|false}}
+  "persona_switch_seen": true|false,
+  "situations": [<every situation this call went through, from: {situations}>],
+  "seller_facts": [
+    {{"kind": "own_number|correction|commitment|preference|objection|product",
+      "fact": "<what to remember about THIS seller for the next call, one short English line>",
+      "quote": "<the seller's exact words>",
+      "contradicts_our_data": true|false}}
+  ]}}
+
+seller_facts: only things the SELLER said about himself or agreed to (his own figures, products he
+does or does not sell, a meeting/callback time, when to call, how he prefers to talk, his objection).
+Never the bot's claims. Empty list if none. contradicts_our_data is true when he corrects what the bot
+said about his business.
 
 {examples}
 TRANSCRIPT (turns are numbered):
@@ -68,8 +80,8 @@ def numbered(transcript):
 
 def grade(call_id, transcript, model=config.GRADE_MODEL, use_examples=True):
     j, cost = llm.chat_json([{"role": "user", "content": PROMPT.format(
-        flags=", ".join(FLAGS), examples=fewshot() if use_examples else "",
-        transcript=numbered(transcript)[:30000])}], model, max_tokens=1000, label="grade: ")
+        flags=", ".join(FLAGS), situations=", ".join(store.SITUATIONS), examples=fewshot() if use_examples else "",
+        transcript=numbered(transcript)[:30000])}], model, max_tokens=1800, label="grade: ")
     flags = [f for f in (j.get("flags") or []) if f in FLAGS]
     reason = (j.get("reason") or "") + (f' — "{j["evidence"][:160]}"' if j.get("evidence") else "")
     store.run("""INSERT OR REPLACE INTO audit (call_id, grade, reason, failure_turn, confidence, flags, sales_ready,
@@ -83,6 +95,25 @@ def grade(call_id, transcript, model=config.GRADE_MODEL, use_examples=True):
         if f in ("frustration", "human_request", "loop", "wrong_requirement", "low_confidence"):
             store.run("INSERT INTO queue VALUES (?,?,?,?,?,?,?,?)",
                       (store.nid(), "risk", call_id, None, f, store.J({"from": "audit"}), store.now(), None))
+    # Level 2 input: which situations this call went through
+    store.run("DELETE FROM call_situation WHERE call_id=?", (call_id,))
+    for sit in j.get("situations") or []:
+        if sit in store.SITUATIONS:
+            store.run("INSERT OR IGNORE INTO call_situation VALUES (?,?)", (call_id, sit))
+    # Level 3: what to remember about this seller (applied automatically to his next call)
+    glid = (store.one("SELECT glid FROM call WHERE id=?", (call_id,)) or {}).get("glid")
+    if glid:
+        store.run("DELETE FROM seller_fact WHERE call_id=? AND removed=0", (call_id,))
+        for f in j.get("seller_facts") or []:
+            if not f.get("fact"):
+                continue
+            store.run("INSERT INTO seller_fact VALUES (?,?,?,?,?,?,?,0,?)",
+                      (store.nid(), str(glid), f.get("kind") or "preference", f["fact"][:200],
+                       (f.get("quote") or "")[:200], call_id, 1 if f.get("contradicts_our_data") else 0, store.now()))
+            if f.get("contradicts_our_data"):
+                store.run("INSERT INTO queue VALUES (?,?,?,?,?,?,?,?)",
+                          (store.nid(), "risk", call_id, str(glid), "check catalogue data: " + f["fact"][:120],
+                           store.J({"from": "seller_fact"}), store.now(), None))
     j["cost"] = cost
     return j
 

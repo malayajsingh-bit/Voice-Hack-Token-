@@ -193,7 +193,7 @@ def call(cid: str):
 
 @app.post("/audit/cluster")
 def do_cluster():
-    return cl.cluster()
+    return {"level1": cl.cluster(), "level2": cl.cluster_groups()}
 
 
 @app.get("/causes")
@@ -242,6 +242,8 @@ def _card(f):
     if f["status"] == "promoted" and not m.get("sarvam_pushed"):
         stage = 2.5
     return {"id": f["id"], "status": f["status"], "stage": stage,
+            "level": (rc.get("level") or 1), "scope_label": m.get("scope_label") or "",
+            "scope_kind": (rc.get("scope") or "").split(":")[0],
             "problem": rc.get("name") or "Unnamed issue", "calls": rc.get("count") or 0,
             "fatal": rc.get("fatal_count") or 0,
             "what_changes": (m.get("summary") or "").split("\n")[0].split(". ")[0].rstrip(".") + ".",
@@ -252,15 +254,53 @@ def _card(f):
             "sarvam_pushed": bool(m.get("sarvam_pushed")), "created": f["created"]}
 
 
+def _scope_label(scope):
+    kind, _, key = (scope or "").partition(":")
+    if kind == "situation":
+        return store.SITUATIONS.get(key, key)
+    if kind == "category":
+        return store.category_label(key)
+    return ""
+
+
 @app.get("/approvals")
 def approvals():
     fx_rows = store.rows("SELECT * FROM fix ORDER BY created DESC")
     cards = [_card(f) for f in fx_rows if f["status"] != "rejected"]
     with_fix = {f["cause_id"] for f in fx_rows if f["status"] != "rejected"}
-    open_causes = [{"id": c["id"], "problem": c["name"], "calls": c["count"], "fatal": c["fatal_count"]}
-                   for c in cl.ranked() if c["id"] not in with_fix]
-    return {"waiting": [c for c in cards if c["stage"] < 3], "live": [c for c in cards if c["stage"] >= 3],
-            "no_fix_yet": open_causes, "stages": STAGES}
+    out = {"stages": STAGES}
+    for lvl in (1, 2):
+        cs = [c for c in cards if c["level"] == lvl]
+        out[f"level{lvl}"] = {
+            "waiting": [c for c in cs if c["stage"] < 3], "live": [c for c in cs if c["stage"] >= 3],
+            "no_fix_yet": [{"id": c["id"], "problem": c["name"], "calls": c["count"], "fatal": c["fatal_count"],
+                            "scope_label": _scope_label(c.get("scope")), "scope_kind": (c.get("scope") or "").split(":")[0]}
+                           for c in cl.ranked(lvl) if c["id"] not in with_fix]}
+    out["level3"] = sellers_memory()
+    return out
+
+
+@app.get("/sellers/memory")
+def sellers_memory():
+    facts = store.rows("SELECT * FROM seller_fact WHERE removed=0 ORDER BY created DESC")
+    by = {}
+    for f in facts:
+        by.setdefault(f["glid"], []).append(f)
+    out = []
+    for glid, fs in by.items():
+        ctx = store.one("SELECT raw FROM seller_ctx WHERE glid=?", (glid,))
+        name = store.L(ctx["raw"], {}).get("company_name") if ctx else None
+        last = store.one("SELECT max(created) AS t FROM call WHERE glid=?", (glid,))["t"]
+        out.append({"glid": glid, "name": name or f"Seller {glid}", "last_call": last,
+                    "facts": [{"id": f["id"], "kind": f["kind"], "fact": f["fact"], "quote": f["quote"],
+                               "check_data": bool(f["check_data"]), "call_id": f["call_id"]} for f in fs]})
+    return out
+
+
+@app.post("/sellers/facts/{fid}/remove")
+def remove_fact(fid: str):
+    store.run("UPDATE seller_fact SET removed=1 WHERE id=?", (fid,))
+    return {"ok": True}
 
 
 @app.post("/fixes/{fid}/mark_pushed")

@@ -45,7 +45,7 @@ def cluster(max_k=8):
     km = best[1] if best else KMeans(n_clusters=1, n_init=1, random_state=7).fit(X)
     labels = km.labels_
     with store.db() as c:
-        c.execute("DELETE FROM root_cause")
+        c.execute("DELETE FROM root_cause WHERE coalesce(level,1)=1")
     out = []
     for k in sorted(set(labels)):
         idx = [i for i, l in enumerate(labels) if l == k]
@@ -62,7 +62,8 @@ def cluster(max_k=8):
         frus = sum(1 for i in idx if "frustration" in store.L(rows[i]["flags"]))
         severity = (3 * fatal + 1 * (len(idx) - fatal)) / len(idx) + (1 if frus > len(idx) / 3 else 0)
         cid = store.nid()
-        store.run("INSERT INTO root_cause VALUES (?,?,?,?,?,?,?,?,?)",
+        store.run("""INSERT INTO root_cause (id, name, description, count, fatal_count, severity, impact, examples,
+                     created, level, scope) VALUES (?,?,?,?,?,?,?,?,?,1,NULL)""",
                   (cid, nm.get("name"), nm.get("description"), len(idx), fatal, round(severity, 2),
                    round(len(idx) * severity, 1), store.J([rows[i]["call_id"] for _, i in d[:8]]), store.now()))
         for i in idx:
@@ -73,5 +74,56 @@ def cluster(max_k=8):
     return out
 
 
-def ranked():
+def ranked(level=None):
+    if level:
+        return store.rows("SELECT * FROM root_cause WHERE coalesce(level,1)=? ORDER BY impact DESC", (level,))
     return store.rows("SELECT * FROM root_cause ORDER BY impact DESC")
+
+
+GROUP_PROMPT = """These failures all happened with IndiaMART sellers in the same group: {group}.
+Name the ONE behaviour of the voice bot, specific to this group, that a playbook rule could fix.
+Short sentence a sales trainer would write. Then two lines of description.
+
+Failures:
+{examples}
+
+Return ONLY JSON: {{"name": "<= 14 words", "description": "<two lines>"}}"""
+
+
+def _category_of_call(call_id):
+    c = store.one("SELECT glid FROM call WHERE id=?", (call_id,)) or {}
+    return store.category_of(c.get("glid")) if c.get("glid") else None
+
+
+def cluster_groups(min_calls=2):
+    """Level 2: one root cause per disposition and per seller category that has repeated failures.
+    No k-means here: the group IS the cluster; the LLM names what goes wrong within it."""
+    rows = store.rows("SELECT call_id, grade, reason, flags FROM audit WHERE grade='Fatal' AND reason IS NOT NULL")
+    groups = {}
+    for r in rows:
+        for s in store.rows("SELECT situation FROM call_situation WHERE call_id=?", (r["call_id"],)):
+            groups.setdefault(("situation", s["situation"]), []).append(r)
+        cat = _category_of_call(r["call_id"])
+        if cat:
+            groups.setdefault(("category", cat), []).append(r)
+    with store.db() as c:
+        c.execute("DELETE FROM root_cause WHERE level=2")
+    out = []
+    for (kind, key), rs in groups.items():
+        if len(rs) < min_calls:
+            continue
+        label = store.SITUATIONS.get(key) if kind == "situation" else store.category_label(key)
+        try:
+            nm, _ = llm.chat_json([{"role": "user", "content": GROUP_PROMPT.format(
+                group=label, examples="\n".join(f"- {x['reason']}" for x in rs[:8]))}],
+                config.NAME_MODEL, max_tokens=2000, label="group: ")
+        except Exception:
+            nm = {"name": rs[0]["reason"][:60], "description": ""}
+        cid = store.nid()
+        n = len(rs)
+        store.run("""INSERT INTO root_cause (id, name, description, count, fatal_count, severity, impact, examples,
+                     created, level, scope) VALUES (?,?,?,?,?,?,?,?,?,2,?)""",
+                  (cid, nm.get("name"), nm.get("description"), n, n, 3.0, 3.0 * n,
+                   store.J([x["call_id"] for x in rs[:8]]), store.now(), f"{kind}:{key}"))
+        out.append({"id": cid, "scope": f"{kind}:{key}", "label": label, "name": nm.get("name"), "count": n})
+    return out

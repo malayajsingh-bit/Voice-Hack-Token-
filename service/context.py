@@ -120,6 +120,38 @@ def seller_md(raw):
     return "\n".join(lines)
 
 
+CATEGORY_PROMPT = """Place this IndiaMART seller in ONE category from the list, by what he sells.
+If none fits well, create a new broad category (2 to 4 words, like the others), never a narrow product name.
+
+CATEGORIES: {cats}
+
+SELLER: {name}. Products and categories: {products}
+
+Return ONLY JSON: {{"key": "<existing key, or a new snake_case key>", "label": "<label>", "new": true|false}}"""
+
+
+def assign_category(glid, raw):
+    """One LLM call per seller, the first time we see him. Creates a category when none fits."""
+    have = store.category_of(glid)
+    if have:
+        return have
+    cats = store.categories()
+    products = ", ".join(c.get("category", "") for c in (raw.get("cats") or [])) or raw.get("company_name", "")
+    try:
+        j, _ = llm.chat_json([{"role": "user", "content": CATEGORY_PROMPT.format(
+            cats="; ".join(f"{c['key']} = {c['label']}" for c in cats), name=raw.get("company_name"),
+            products=products)}], config.FIX_MODEL, max_tokens=1500, label="category: ")
+    except Exception:
+        return None
+    key = (j.get("key") or "").strip().lower().replace(" ", "_")[:40]
+    if not key:
+        return None
+    if key not in {c["key"] for c in cats}:
+        store.run("INSERT OR IGNORE INTO seller_category VALUES (?,?,'llm',?)", (key, j.get("label") or key, store.now()))
+    store.run("INSERT OR REPLACE INTO seller_category_map VALUES (?,?,?)", (str(glid), key, store.now()))
+    return key
+
+
 def build(glid, force=False):
     row = store.one("SELECT * FROM seller_ctx WHERE glid=?", (str(glid),))
     if row and not force:
@@ -139,6 +171,7 @@ def build(glid, force=False):
                    "avoid": [], "why": f"default persona ({str(e)[:80]})"}
     store.run("INSERT OR REPLACE INTO seller_ctx VALUES (?,?,?,?,?,?)",
               (str(glid), md, store.J(persona), store.J(demand), store.J(raw), store.now()))
+    assign_category(glid, raw)
     return {"glid": str(glid), "seller_md": md, "persona": persona, "demand": demand, "built_at": store.now()}
 
 
@@ -147,8 +180,17 @@ def variables(glid):
     c = build(glid)
     p = c["persona"]
     raw = store.L(store.one("SELECT raw FROM seller_ctx WHERE glid=?", (str(glid),))["raw"], {})
+    # Level 3: what this seller told us on earlier calls
+    facts = store.rows("SELECT fact FROM seller_fact WHERE glid=? AND removed=0 ORDER BY created DESC LIMIT 6",
+                       (str(glid),))
+    memory = ("\nRemembered from earlier calls: " + "; ".join(f["fact"] for f in facts)) if facts else ""
+    # Level 2: the approved playbook for this seller's category
+    cat = store.category_of(glid) or assign_category(glid, raw)
+    cat_pb = (store.one("SELECT text FROM category_playbook WHERE category=?", (cat,)) or {}).get("text") if cat else None
     return {"glid": str(glid), "seller_name": raw.get("company_name") or f"Seller {glid}",
-            "seller_md": c["seller_md"],
+            "category": store.category_label(cat) if cat else "",
+            "category_playbook": cat_pb or "",
+            "seller_md": c["seller_md"] + memory,
             "persona": f"language={p.get('language')}; formality={p.get('formality')}; pace={p.get('pace')}; "
                        f"warmth={p.get('warmth')}; opening={p.get('opening')}",
             "playbook": "; ".join(f"{k}: {v}" for k, v in (p.get("playbook") or {}).items()),

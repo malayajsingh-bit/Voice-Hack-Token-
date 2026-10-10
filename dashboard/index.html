@@ -62,6 +62,16 @@ pre .add{color:var(--ok)}pre .del{color:var(--bad)}
 .ghost b{flex:1;font-weight:500}
 .sec-t{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);margin:26px 0 10px}
 .empty{color:var(--mute);padding:18px;text-align:center;border:1px dashed var(--line);border-radius:14px}
+
+.lvl{margin:8px 0 34px}.lvl-h{display:flex;gap:14px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.lvl-h h2{margin:0;font-size:20px}.lvl-h .sub{color:var(--mute);font-size:13.5px}
+.lvl-n{width:36px;height:36px;border-radius:50%;background:var(--ink);color:#fff;display:grid;place-items:center;font-weight:700}
+.lvl-h .pill{margin-left:auto}
+.pill.sit{background:#E7EEF9;color:#1E40AF}.pill.ind{background:#F3EAFB;color:#6B21A8}
+.sel{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin-bottom:10px}
+.sel-h{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}.sel-h b{font-size:16px}
+.fact{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)}
+.fact .ft{flex:1}.fact .pill{min-width:84px;text-align:center}
 </style></head><body>
 <header><b>Voice Bot Audit Loop</b><nav id="nav"></nav><span class="r" id="hdr"></span></header>
 <main id="m"></main><div class="toast" id="toast"></div>
@@ -136,7 +146,7 @@ async function handle(id){await post('/queue/'+id+'/handle');render()}
 async function prompt(){const r=await api('/prompt');return `<h2>Agent prompt</h2><div class="card"><div class="muted">versions: ${r.versions.map(v=>`v${v.version}${v.active?' (active)':''}`).join(', ')||'file only'}</div><pre>${esc(r.prompt)}</pre></div>`}
 
 
-async function approve(){const r=await api('/approvals');const W=r.waiting,L=r.live,N=r.no_fix_yet,S=r.stages;
+async function approve(){const r=await api('/approvals');const S=r.stages,L1=r.level1,L2=r.level2,L3=r.level3;
   const pct=v=>v==null?'—':Math.round(v*100)+'%';
   const stepper=st=>`<div class="steps4">${S.map((s,i)=>`<span class="${i<=Math.floor(st)?'done':(i===Math.floor(st)+1?'now':'')}">${s}${i===3&&st===2.5?' · push pending':''}</span>`).join('')}</div>`;
   const action=c=>{
@@ -145,21 +155,34 @@ async function approve(){const r=await api('/approvals');const W=r.waiting,L=r.l
     if(c.stage===2)return `<button class="btn p big" onclick="apLive('${c.id}')">Make live</button>`;
     if(c.stage===2.5)return `<span class="pill w">Approved · waiting to be pushed to Sarvam</span>`;
     return '';};
+  const tag=c=>c.scope_label?`<span class="pill ${c.scope_kind==='category'?'ind':'sit'}">${esc(c.scope_label)}</span>`:'';
   const card=c=>`<div class="ap">
-    <div class="top"><h3>${esc(c.problem)}</h3><div class="meta">${c.fatal?`<span class="pill fatal">${c.fatal} failed call${c.fatal>1?'s':''}</span>`:''}<span class="pill">whole bot</span></div></div>
+    <div class="top"><h3>${esc(c.problem)}</h3><div class="meta">${tag(c)}${c.fatal?`<span class="pill fatal">${c.fatal} failed call${c.fatal>1?'s':''}</span>`:''}</div></div>
     <div class="chg"><b>Fix:</b> ${esc(c.what_changes)}</div>
     ${c.before!=null?`<div class="res"><div class="bad"><s>Failing now</s><b>${pct(c.before)}</b></div><div class="good"><s>Failing with fix · tested on ${c.tested_on} calls</s><b>${pct(c.after)}</b></div></div>`:''}
     ${stepper(c.stage)}
     <div class="acts">${action(c)}${c.stage<3&&c.stage!==2.5?`<button class="btn big" onclick="apNo('${c.id}')">Reject</button>`:''}</div>
     <details class="more"><summary>Details</summary>
-      ${c.removed.length||c.added.length?`<div class="lines">${c.removed.map(l=>`<div class="rm">− ${esc(l)}</div>`).join('')}${c.added.map(l=>`<div class="ad">+ ${esc(l)}</div>`).join('')}</div>`:'<div class="muted">Not a prompt change: '+esc(c.kind||'')+'</div>'}
+      ${c.removed.length||c.added.length?`<div class="lines">${c.removed.map(l=>`<div class="rm">− ${esc(l)}</div>`).join('')}${c.added.map(l=>`<div class="ad">+ ${esc(l)}</div>`).join('')}</div>`:''}
       ${c.quote?`<div class="quote">From a real call: “${esc(c.quote)}”</div>`:''}
       ${c.why?`<div class="muted" style="margin-top:8px">${esc(c.why)}</div>`:''}
     </details></div>`;
-  return `<div class="ap-head"><span class="n">${W.length}</span><h1>fix${W.length===1?'':'es'} waiting for you</h1><span class="sub">Approve only what you would say yourself on a call.</span></div>
-    ${W.length?W.map(card).join(''):'<div class="empty">Nothing to approve right now.</div>'}
-    ${N.length?`<div class="sec-t">Problems without a fix yet</div>${N.map(c=>`<div class="ghost"><b>${esc(c.problem)}</b><span class="pill fatal">${c.fatal} failed</span><button class="btn" onclick="apPropose('${c.id}',this)">Suggest a fix</button></div>`).join('')}`:''}
-    ${L.length?`<div class="sec-t">Live on Sarvam</div>${L.map(card).join('')}`:''}`}
+  const ghost=c=>`<div class="ghost">${c.scope_label?`<span class="pill ${c.scope_kind==='category'?'ind':'sit'}">${esc(c.scope_label)}</span>`:''}<b>${esc(c.problem)}</b><span class="pill fatal">${c.fatal} failed</span><button class="btn" onclick="apPropose('${c.id}',this)">Suggest a fix</button></div>`;
+  const level=(n,title,sub,badge,L)=>`<section class="lvl"><div class="lvl-h"><span class="lvl-n">${n}</span><div><h2>${title}</h2><div class="sub">${sub}</div></div><span class="pill ${badge==='auto'?'nf':'w'}">${badge==='auto'?'Automatic':'Needs your approval'}</span></div>
+    ${L.waiting.length?L.waiting.map(card).join(''):''}
+    ${L.no_fix_yet.length?`<div class="sec-t">Problems without a fix yet</div>${L.no_fix_yet.map(ghost).join('')}`:''}
+    ${!L.waiting.length&&!L.no_fix_yet.length?'<div class="empty">Nothing here yet.</div>':''}
+    ${L.live.length?`<div class="sec-t">Live</div>${L.live.map(card).join('')}`:''}</section>`;
+  const kindLabel={own_number:'His number',correction:'Correction',commitment:'Agreed',preference:'Preference',objection:'Objection',product:'Product'};
+  const seller=s=>`<div class="sel"><div class="sel-h"><b>${esc(s.name)}</b><span class="muted">GLID ${esc(s.glid)} · ${s.facts.length} fact${s.facts.length>1?'s':''}${s.last_call?' · last call '+esc(s.last_call.slice(0,16)):''}</span></div>
+    ${s.facts.map(f=>`<div class="fact"><span class="pill">${kindLabel[f.kind]||esc(f.kind)}</span><div class="ft"><div>${esc(f.fact)}${f.check_data?' <span class="pill fatal">check our data</span>':''}</div>${f.quote?`<div class="muted">“${esc(f.quote)}”</div>`:''}</div><button class="btn sm" onclick="rmFact('${f.id}')">Remove</button></div>`).join('')}</div>`;
+  const waiting=L1.waiting.length+L2.waiting.length,facts=L3.reduce((a,s)=>a+s.facts.length,0);
+  return `<div class="ap-head"><span class="n">${waiting}</span><h1>fix${waiting===1?'':'es'} waiting for you</h1><span class="sub">${L3.length} seller${L3.length===1?'':'s'} updated automatically · ${facts} facts remembered</span></div>
+    ${level(1,'Whole bot','Changes the prompt for every call.','approve',L1)}
+    ${level(2,'Disposition & seller category','Changes only how the bot handles one kind of conversation, or sellers in one category.','approve',L2)}
+    <section class="lvl"><div class="lvl-h"><span class="lvl-n">3</span><div><h2>Per seller</h2><div class="sub">What each seller told us. Used in his next call automatically. Remove anything wrong.</div></div><span class="pill nf">Automatic</span></div>
+    ${L3.length?L3.map(seller).join(''):'<div class="empty">No seller facts yet.</div>'}</section>`}
+async function rmFact(id){await post('/sellers/facts/'+id+'/remove');toast('Removed');render()}
 async function apTest(id){toast('Testing on the failed calls… about a minute');await post('/fixes/'+id+'/replay?limit=5');toast('Tested');render()}
 async function apOk(id){await post('/fixes/'+id+'/approve',{share:0.1});toast('Approved');render()}
 async function apLive(id){await post('/fixes/'+id+'/promote');toast('Marked live · push to Sarvam pending');render()}
