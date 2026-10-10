@@ -71,6 +71,7 @@ def cluster(max_k=8):
         out.append({"id": cid, "name": nm.get("name"), "count": len(idx), "fatal": fatal,
                     "impact": round(len(idx) * severity, 1)})
     out.sort(key=lambda x: -x["impact"])
+    retire_orphan_fixes()
     return out
 
 
@@ -126,4 +127,11 @@ def cluster_groups(min_calls=2):
                   (cid, nm.get("name"), nm.get("description"), n, n, 3.0, 3.0 * n,
                    store.J([x["call_id"] for x in rs[:8]]), store.now(), f"{kind}:{key}"))
         out.append({"id": cid, "scope": f"{kind}:{key}", "label": label, "name": nm.get("name"), "count": n})
+    retire_orphan_fixes()
     return out
+
+
+def retire_orphan_fixes():
+    """Fixes whose problem disappeared in a regroup can no longer be judged against it."""
+    store.run("""UPDATE fix SET status='rejected', decided_at=? WHERE status IN ('proposed','approved','testing')
+                 AND cause_id NOT IN (SELECT id FROM root_cause)""", (store.now(),))

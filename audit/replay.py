@@ -16,7 +16,7 @@ import grade as gr   # noqa: E402
 import llm      # noqa: E402
 import store    # noqa: E402
 
-BOT_MODEL = "anthropic/claude-sonnet-5"      # plays the bot in replays; reliable short completions
+BOT_MODEL = "google/gemini-3.7-flash"         # plays the bot in replays (not the grader)
 
 REPLAY = """You are the Voice Bot. Follow the SYSTEM PROMPT below exactly. You are replaying a real call:
 the seller's lines are fixed; you produce only the bot's next line each time. Keep it to one or two

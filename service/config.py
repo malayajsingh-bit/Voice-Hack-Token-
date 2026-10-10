@@ -8,9 +8,9 @@ DATA = ROOT / "data"
 ENV = ROOT / ".env"
 DB = DATA / "audit.db"
 
-GRADE_MODEL = "anthropic/claude-sonnet-5"       # grader
-FIX_MODEL = "google/gemini-3.6-flash"            # proposes fixes (never the same as the grader)
-NAME_MODEL = "google/gemini-3.6-flash"           # names clusters
+GRADE_MODEL = "google/gemini-3.6-flash"          # grader (OpenRouter)
+FIX_MODEL = "google/gemini-3.7-flash"            # proposes fixes, persona, category (never the grader)
+NAME_MODEL = "google/gemini-3.7-flash"           # names problem groups
 EMBED_MODEL = "openai/text-embedding-3-small"    # if the gateway exposes it; TF-IDF fallback
 
 
