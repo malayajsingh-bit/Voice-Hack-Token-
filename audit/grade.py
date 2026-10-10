@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "service"))
 import config   # noqa: E402
 import llm      # noqa: E402
+import rules    # noqa: E402
 import store    # noqa: E402
 
 FLAGS = ["wrong_requirement", "frustration", "loop", "low_confidence", "human_request",
@@ -67,10 +68,33 @@ def numbered(transcript):
 
 
 def grade(call_id, transcript, model=config.GRADE_MODEL, use_examples=True):
+    # Rule-based checks run first. A Fatal from them is deterministic (number
+    # mismatch, booking lost in a close turn, pitch after no) — the LLM used to
+    # miss these, so we trust the rule and skip the model call to save cost.
+    rv = rules.check(call_id, transcript)
+    if rv.get("grade") == "Fatal":
+        reason = rv["reason"] + (f' — "{rv["evidence"][:160]}"' if rv.get("evidence") else "")
+        store.run("""INSERT OR REPLACE INTO audit (call_id, grade, reason, failure_turn, confidence, flags, sales_ready,
+                     sales_reason, model, cost, graded_at, human_grade, cause_id)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,
+                       (SELECT human_grade FROM audit WHERE call_id=?), (SELECT cause_id FROM audit WHERE call_id=?))""",
+                  (call_id, "Fatal", reason, -1, 1.0, store.J(rv["flags"]), 0, "",
+                   "rules", 0.0, store.now(), call_id, call_id))
+        for f in rv["flags"]:
+            if f in ("frustration", "human_request", "loop", "wrong_requirement", "low_confidence"):
+                store.run("INSERT INTO queue VALUES (?,?,?,?,?,?,?,?)",
+                          (store.nid(), "risk", call_id, None, f, store.J({"from": "rules"}), store.now(), None))
+        return {"grade": "Fatal", "reason": rv["reason"], "evidence": rv["evidence"],
+                "flags": rv["flags"], "cost": 0.0, "source": "rules"}
+
     j, cost = llm.chat_json([{"role": "user", "content": PROMPT.format(
         flags=", ".join(FLAGS), examples=fewshot() if use_examples else "",
         transcript=numbered(transcript)[:30000])}], model, max_tokens=1000, label="grade: ")
     flags = [f for f in (j.get("flags") or []) if f in FLAGS]
+    # merge rule-level non-fatal flags (e.g. loop) with the LLM's flags
+    for f in rv.get("flags", []):
+        if f in FLAGS and f not in flags:
+            flags.append(f)
     reason = (j.get("reason") or "") + (f' — "{j["evidence"][:160]}"' if j.get("evidence") else "")
     store.run("""INSERT OR REPLACE INTO audit (call_id, grade, reason, failure_turn, confidence, flags, sales_ready,
                  sales_reason, model, cost, graded_at, human_grade, cause_id)
