@@ -14,13 +14,35 @@ import llm      # noqa: E402
 import store    # noqa: E402
 
 FLAGS = ["wrong_requirement", "frustration", "loop", "low_confidence", "human_request",
-         "kept_pitching_after_no", "missed_objection", "wrong_fact", "bad_timing", "language_mismatch"]
+         "kept_pitching_after_no", "missed_objection", "wrong_fact", "bad_timing", "language_mismatch",
+         "quoted_price", "asked_payment_details", "used_jargon"]
+
+# Company rules for this bot. Breaking one makes the call Fatal whatever else happened, and each
+# rule is its own problem group on the dashboard (audit/cluster.py), so each gets its own fix.
+POLICY = {
+    "quoted_price": ("Bot quotes a plan price on the call",
+                     "The bot says a plan amount (per month, per year, + GST) on the call. Price is explained "
+                     "only by the executive in the meeting; on the call it makes the meeting look unnecessary."),
+    "used_jargon": ("Bot uses IndiaMART jargon the seller does not know",
+                    "The bot says BuyLead, BuyLeads or TrustSEAL. Sellers do not know these words; it should say "
+                    "buyers who want to buy his product."),
+    "asked_payment_details": ("Bot asks how the seller will pay",
+                              "The bot asks about payment method, card, bank or current account before any "
+                              "meeting. Sellers hear this as a scam signal and the call loses trust."),
+}
 
 PROMPT = """You audit ONE outbound sales call made by IndiaMART's Voice Bot to a seller (Hinglish).
 Grade the BOT, not the seller.
 
 Fatal: the call could not achieve its purpose because of something the bot did or failed to do.
 Non-Fatal: purpose achieved, or failure was outside the bot's control.
+
+COMPANY RULES (breaking any one is Fatal, and its flag must be set):
+- quoted_price: the bot must never say a plan price or amount (per month, per year, plus GST, discount figure).
+  Price is explained only by the executive in the meeting. Saying the seller's market demand numbers is fine.
+- used_jargon: the bot must never say BuyLead, BuyLeads or TrustSEAL; it says "buyers who want to buy your product".
+- asked_payment_details: the bot must never ask how the seller will pay (card, debit card, bank,
+  current account, UPI) or for any account detail.
 
 FLAGS (pick all that apply, from this list only): {flags}
 sales_ready: true only if the seller showed buying intent — asked about plans, prices, results,
@@ -83,6 +105,8 @@ def grade(call_id, transcript, model=config.GRADE_MODEL, use_examples=True):
         flags=", ".join(FLAGS), situations=", ".join(store.SITUATIONS), examples=fewshot() if use_examples else "",
         transcript=numbered(transcript)[:30000])}], model, max_tokens=1800, label="grade: ")
     flags = [f for f in (j.get("flags") or []) if f in FLAGS]
+    if any(f in POLICY for f in flags):
+        j["grade"] = "Fatal"
     reason = (j.get("reason") or "") + (f' — "{j["evidence"][:160]}"' if j.get("evidence") else "")
     store.run("""INSERT OR REPLACE INTO audit (call_id, grade, reason, failure_turn, confidence, flags, sales_ready,
                  sales_reason, model, cost, graded_at, human_grade, cause_id)

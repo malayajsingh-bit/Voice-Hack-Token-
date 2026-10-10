@@ -123,7 +123,9 @@ def propose(cause_id, model=config.FIX_MODEL):
         raise LookupError(cause_id)
     if (c.get("level") or 1) == 2:
         return propose_group(c, model)
-    ex = store.rows("SELECT reason FROM audit WHERE cause_id=? LIMIT 8", (cause_id,))
+    ids = store.L(c.get("examples"))
+    ex = ([r for r in (store.one("SELECT reason FROM audit WHERE call_id=?", (i,)) for i in ids[:8]) if r]
+          or store.rows("SELECT reason FROM audit WHERE cause_id=? LIMIT 8", (cause_id,)))
     prompt = current_prompt()
     j, cost = llm.chat_json([{"role": "user", "content": FIX_PROMPT.format(
         name=c["name"], description=c["description"], examples="\n".join(f"- {e['reason']}" for e in ex),
@@ -136,7 +138,8 @@ def propose(cause_id, model=config.FIX_MODEL):
     store.run("INSERT INTO fix VALUES (?,?,?,?,?,?,?)",
               (fid, cause_id, diff or f"[{j.get('kind')}] {j.get('change_summary')}",
                store.J({"summary": j.get("change_summary"), "rationale": j.get("rationale"),
-                        "test": j.get("test"), "kind": j.get("kind"), "new_prompt": j.get("new_prompt")}),
+                        "test": j.get("test"), "kind": j.get("kind"), "new_prompt": j.get("new_prompt"),
+                        "base_prompt": prompt}),
                "proposed", store.now(), None))
     return {"id": fid, "kind": j.get("kind"), "diff": diff, "summary": j.get("change_summary"),
             "rationale": j.get("rationale"), "test": j.get("test"), "cost": cost}
@@ -164,9 +167,37 @@ def promote(fix_id):
         return {"category": meta["category"]}
     if meta.get("kind") != "prompt" or not meta.get("new_prompt"):
         raise ValueError("only prompt fixes can be promoted automatically")
+    # Another fix may have gone live since this one was written: apply only this fix's own
+    # change on top of the live prompt, so approving two fixes keeps both.
+    live = current_prompt()
+    new_prompt = rebase(meta.get("base_prompt") or live, meta["new_prompt"], live)
     v = (store.one("SELECT max(version) AS v FROM prompt_version")["v"] or 0) + 1
     store.run("UPDATE prompt_version SET active=0")
-    store.run("INSERT INTO prompt_version VALUES (?,?,?,?,?,1)", (store.nid(), v, meta["new_prompt"], fix_id, store.now()))
+    store.run("INSERT INTO prompt_version VALUES (?,?,?,?,?,1)", (store.nid(), v, new_prompt, fix_id, store.now()))
     store.run("UPDATE fix SET status='promoted', decided_at=? WHERE id=?", (store.now(), fix_id))
-    PROMPT_FILE.write_text(meta["new_prompt"], encoding="utf-8")
+    PROMPT_FILE.write_text(new_prompt, encoding="utf-8")
     return {"version": v}
+
+
+def rebase(base, new, live):
+    """Apply the base->new change to live. Each changed block is found verbatim in live (prompt
+    lines are whole paragraphs, so they are unique); an insertion is anchored on the line before it."""
+    if live == base:
+        return new
+    b, n, out = base.splitlines(), new.splitlines(), live.splitlines()
+    for tag, i1, i2, j1, j2 in reversed(difflib.SequenceMatcher(None, b, n, autojunk=False).get_opcodes()):
+        if tag == "equal":
+            continue
+        if i2 > i1:
+            block = b[i1:i2]
+            at = next((k for k in range(len(out) - len(block) + 1) if out[k:k + len(block)] == block), None)
+            if at is None:
+                raise ValueError(f"cannot apply fix: changed text no longer in the live prompt: {block[0][:80]}")
+            out[at:at + len(block)] = n[j1:j2]
+        else:
+            anchor = b[i1 - 1] if i1 else None
+            at = (out.index(anchor) + 1) if anchor in out else (0 if anchor is None else None)
+            if at is None:
+                raise ValueError("cannot apply fix: insertion point no longer in the live prompt")
+            out[at:at] = n[j1:j2]
+    return "\n".join(out) + ("\n" if new.endswith("\n") else "")

@@ -68,8 +68,9 @@ def run(fix_id, limit=10):
         prompt_b = meta["new_prompt"]
     else:
         raise ValueError("fix has nothing to replay against")
-    rc = store.one("SELECT level, examples FROM root_cause WHERE id=?", (f["cause_id"],)) or {}
-    if (rc.get("level") or 1) == 2:
+    rc = store.one("SELECT level, examples, scope FROM root_cause WHERE id=?", (f["cause_id"],)) or {}
+    rule = (rc.get("scope") or "")[7:] if (rc.get("scope") or "").startswith("policy:") else None
+    if (rc.get("level") or 1) == 2 or rule:
         ids = store.L(rc.get("examples"))[:limit]
         calls = [c for c in (store.one("SELECT id, transcript FROM call WHERE id=?", (i,)) for i in ids) if c]
     else:
@@ -85,7 +86,8 @@ def run(fix_id, limit=10):
                   (rid, None, "replay", store.now(), None, new_t, None, "B", store.J({"fix": fix_id, "orig": c["id"]}), store.now()))
         g = gr.grade(rid, new_t)
         cost += g.get("cost", 0)
-        after_fatal += g.get("grade") == "Fatal"
+        # a rule's fix is judged on that rule only: another open problem in the same call is not its failure
+        after_fatal += (rule in (g.get("flags") or [])) if rule else (g.get("grade") == "Fatal")
         results.append({"orig": c["id"], "replay": rid, "grade": g.get("grade"), "reason": g.get("reason")})
     r = {"fix": fix_id, "n": before, "before_fatal": before, "after_fatal": after_fatal,
          "before_rate": 1.0 if before else 0, "after_rate": round(after_fatal / before, 3) if before else 0,

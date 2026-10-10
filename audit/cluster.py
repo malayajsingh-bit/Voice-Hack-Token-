@@ -26,12 +26,41 @@ Examples (most central first):
 Return ONLY JSON: {{"name": "<= 12 words", "description": "<two lines>"}}"""
 
 
+def policy_causes():
+    """One problem per broken company rule (grade.POLICY). A call that broke two rules is in both,
+    so each rule gets its own fix. Grouped by rule, not by wording, so it works from the first call."""
+    import grade as gr
+    rows = store.rows("SELECT call_id, flags FROM audit WHERE grade='Fatal'")
+    out, taken = [], set()
+    for flag, (name, desc) in gr.POLICY.items():
+        ids = [r["call_id"] for r in rows if flag in store.L(r["flags"])]
+        if not ids:
+            continue
+        cid = store.nid()
+        store.run("""INSERT INTO root_cause (id, name, description, count, fatal_count, severity, impact, examples,
+                     created, level, scope) VALUES (?,?,?,?,?,?,?,?,?,1,?)""",
+                  (cid, name, desc, len(ids), len(ids), 4.0, 4.0 * len(ids), store.J(ids[:8]), store.now(),
+                   "policy:" + flag))
+        for i in ids:
+            if i not in taken:
+                store.run("UPDATE audit SET cause_id=? WHERE call_id=?", (cid, i))
+                taken.add(i)
+        out.append({"id": cid, "name": name, "count": len(ids), "fatal": len(ids), "impact": 4.0 * len(ids)})
+    return out, taken
+
+
 def cluster(max_k=8):
-    rows = store.rows("SELECT call_id, grade, reason, flags FROM audit WHERE reason IS NOT NULL AND grade='Fatal'")
+    with store.db() as c:
+        c.execute("DELETE FROM root_cause WHERE coalesce(level,1)=1")
+    pol, taken = policy_causes()
+    rows = [r for r in store.rows("SELECT call_id, grade, reason, flags FROM audit WHERE reason IS NOT NULL AND grade='Fatal'")
+            if r["call_id"] not in taken]
     if len(rows) < 4:
-        rows = store.rows("SELECT call_id, grade, reason, flags FROM audit WHERE reason IS NOT NULL")
+        rows = [r for r in store.rows("SELECT call_id, grade, reason, flags FROM audit WHERE reason IS NOT NULL")
+                if r["call_id"] not in taken]
     if len(rows) < 4:
-        return []
+        retire_orphan_fixes()
+        return pol
     docs = [f"{r['reason']} {' '.join(store.L(r['flags']))}" for r in rows]
     X = TfidfVectorizer(ngram_range=(1, 2), min_df=1, sublinear_tf=True).fit_transform(docs)
     best, best_k = None, 1
@@ -44,9 +73,7 @@ def cluster(max_k=8):
             best, best_k = (s, km), k
     km = best[1] if best else KMeans(n_clusters=1, n_init=1, random_state=7).fit(X)
     labels = km.labels_
-    with store.db() as c:
-        c.execute("DELETE FROM root_cause WHERE coalesce(level,1)=1")
-    out = []
+    out = list(pol)
     for k in sorted(set(labels)):
         idx = [i for i, l in enumerate(labels) if l == k]
         centre = km.cluster_centers_[k]

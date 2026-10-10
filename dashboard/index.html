@@ -98,7 +98,7 @@ async function overview(){const s=await api('/audit/summary');const a=s.agreemen
    <div class="tile"><s>Queues</s><b>${(s.queues.risk||0)+(s.queues.presales||0)}</b><s>risk ${s.queues.risk||0} · pre-sales ${s.queues.presales||0} · callbacks ${s.queues.callback||0}</s></div>
   </div>
   <h2>The trail</h2><div class="card"><div class="trail"><span class="on">audit every call</span><span class="on">flag risk + sales-ready</span><span class="on">cluster root causes</span><span class="on">rank by impact</span><span class="on">propose fix (diff)</span><span>human approves</span><span>test on slice</span><span>promote</span></div>
-  <div class="muted">Grader: Claude Sonnet 5 · Fix proposer: Gemini 3.6 Flash (never the grader) · Promotion pushes the prompt to the Sarvam agent.</div></div>
+  <div class="muted">Grader: Gemini 3.6 Flash · Fix proposer: Gemini 3.7 Flash (never the grader) · Promotion pushes the prompt to the Sarvam agent.</div></div>
   <div class="row"><button class="btn p" onclick="recluster()">Re-cluster root causes</button><a class="btn" href="#/causes">Open causes →</a></div>`}
 
 async function calls(){const r=await api('/calls');return `<h2>Calls (${r.length})</h2><div class="card"><table><tr><th>id</th><th>src</th><th>var</th><th>auto</th><th>human</th><th>reason</th><th>flags</th><th>sales</th></tr>

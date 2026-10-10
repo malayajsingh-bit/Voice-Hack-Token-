@@ -73,14 +73,57 @@ def demand_pitch(raw):
             "aov": aov, "aov_h": f"{aov:,.0f}", "bl_city_30d": posted,
             "weekly_buyleads": weekly, "close_rate": close,
             "monthly_est": monthly_est, "monthly_est_h": crore(monthly_est),
-            "line": (f"Aapki category mein har mahine {buyers:,} buyers aate hain, "
+            "line": (f"Aapke jaisa saaman kharidne wale har mahine {buyers:,} buyers aate hain, "
                      f"{spoken(value)} rupaye ka business. Average order {spoken(aov)} rupaye. "
-                     f"{weekly} BuyLeads har hafte par 10 mein se 1 bhi close ho toh "
-                     f"{spoken(monthly_est)} rupaye mahine ka extra business.")}
+                     f"Har hafte aapko aise {weekly} buyers ki details milengi jo aapka saaman kharidna chahte hain; "
+                     f"10 mein se 1 bhi order de toh {spoken(monthly_est)} rupaye mahine ka extra business.")}
+
+
+# First two digits of the PIN code -> state. Enough to choose a greeting and a language lean.
+PIN_STATE = [((11, 11), "Delhi"), ((12, 13), "Haryana"), ((14, 16), "Punjab"), ((17, 17), "Himachal Pradesh"),
+             ((18, 19), "Jammu and Kashmir"), ((20, 28), "Uttar Pradesh"), ((30, 34), "Rajasthan"),
+             ((36, 39), "Gujarat"), ((40, 44), "Maharashtra"), ((45, 48), "Madhya Pradesh"),
+             ((49, 49), "Chhattisgarh"), ((50, 53), "Telangana and Andhra Pradesh"), ((56, 59), "Karnataka"),
+             ((60, 64), "Tamil Nadu"), ((67, 69), "Kerala"), ((70, 74), "West Bengal"), ((75, 77), "Odisha"),
+             ((78, 79), "North East"), ((80, 85), "Bihar and Jharkhand")]
+
+# One greeting word from the seller's region, then the call continues in Hindi. Nothing more regional
+# than that: real local numbers do the personalising, not stereotypes.
+GREETING = {"Gujarat": "केम छो, नमस्ते जी", "Punjab": "सत श्री अकाल जी", "Maharashtra": "नमस्कार जी",
+            "West Bengal": "नमस्कार जी", "Odisha": "नमस्कार जी"}
+ENGLISH_LEANING = {"Karnataka", "Tamil Nadu", "Kerala", "Telangana and Andhra Pradesh", "North East"}
+
+
+def state_of(raw):
+    try:
+        two = int(str(raw.get("pincode") or "")[:2])
+    except ValueError:
+        return ""
+    return next((s for (lo, hi), s in PIN_STATE if lo <= two <= hi), "")
+
+
+def location(raw):
+    st = state_of(raw)
+    city = raw.get("city") or ""
+    loc = raw.get("locality") or ""
+    return {"state": st, "city": city,
+            "greeting": GREETING.get(st, "Namaste ji" if st in ENGLISH_LEANING else "नमस्ते जी"),
+            "language_lean": "english" if st in ENGLISH_LEANING else "hindi",
+            "meeting_place": (f"aapki dukaan par, {loc}" if loc else "aapki dukaan ya office par")
+                             + (f", {city}" if city else "")}
+
+
+def product_of(raw):
+    """What the seller sells, in his words: top product category, else 'aapka saaman'."""
+    cats = [c.get("category") for c in (raw.get("cats") or []) if c.get("category")]
+    return cats[0] if cats else "aapka saaman"
 
 
 PERSONA_PROMPT = """You design the voice persona for ONE outbound sales call to an Indian MSME seller.
 Decide from the seller data only; be specific; one choice per field.
+Rules for every line you write: no first-person verbs that show the caller's gender (the same persona is
+used by a female and a male voice); never claim a number that is not in the data. Company rules (what may be
+said about price, which words to use) live in the agent prompt, not here.
 
 SELLER DATA:
 {raw}
@@ -91,9 +134,9 @@ Return ONLY JSON:
   "pace": "slow | medium | fast",
   "warmth": "high | medium",
   "voice": {{"gender": "female | male", "accent": "delhi | mumbai | neutral"}},
-  "opening": "<one sentence, uses the seller's name and category hook>",
-  "playbook": {{"price": "<one line>", "no_time": "<one line>", "not_interested": "<one line>",
-               "already_tried": "<one line>"}},
+  "opening": "<one sentence, uses the seller's name and what he sells>",
+  "playbook": {{"price": "<one line>",
+               "no_time": "<one line>", "not_interested": "<one line>", "already_tried": "<one line>"}},
   "avoid": ["<thing not to do with this seller>"],
   "why": "<two lines: which data drove these choices>"}}"""
 
@@ -109,7 +152,7 @@ def seller_md(raw):
         f"products: {raw.get('product_count') or '?'} · catalogue score {raw.get('cqs') or '?'}",
         f"enquiries_90d: {raw.get('enq_received_90d') or 0} · pns_calls_90d: {raw.get('pns_received_90d') or 0}",
         f"demand: {int(ind.get('buyers') or 0):,} buyers/month · ₹{crore(ind.get('value'))} · AOV ₹{float(ind.get('aov') or 0):,.0f}",
-        f"buyleads_city_30d: {bl.get('posted_30d') or 0}",
+        f"buyer_requirements_in_city_30d: {bl.get('posted_30d') or 0}",
     ]
     if raw.get("last_call"):
         lines.append(f"last_call: {raw['last_call']}")
@@ -201,4 +244,15 @@ def variables(glid):
                        f"warmth={p.get('warmth')}; opening={p.get('opening')}",
             "playbook": "; ".join(f"{k}: {v}" for k, v in (p.get("playbook") or {}).items()),
             "avoid": "; ".join(p.get("avoid") or []),
-            "hook": f"{c['demand']['bl_city_30d']} BuyLeads is mahine aapki category mein"}
+            "hook": hook(raw, c["demand"]),
+            **{k: v for k, v in location(raw).items() if k in ("greeting", "city", "meeting_place")},
+            "product": product_of(raw)}
+
+
+def hook(raw, demand):
+    """The opening demand line, in the seller's words: buyers who want his product, never 'BuyLeads'."""
+    n = int(demand.get("bl_city_30d") or 0)
+    city = raw.get("city") or "aapke shehar"
+    if not n:
+        return f"{city} mein {product_of(raw)} ke kaafi buyers hamare paas requirement daalte hain"
+    return f"pichhle mahine {city} mein {n} logon ne {product_of(raw)} kharidne ki requirement daali hai, unki details hamare paas hain"

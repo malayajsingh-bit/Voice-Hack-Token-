@@ -1,25 +1,25 @@
-# The live Sarvam agent
+# The live Sarvam agents
 
-- **Agent**: `IndiaMART Seller Growth Call` · app id `IndiaMART-S-31ca33eb-e1ce` · committed version 1
-- **Deployed prompt**: `agent/sarvam_prompt.md` (the live single-state instructions; `prompt.md` is the original local draft)
-- **Voice**: Sarika (conversational Hindi female, Sarvam TTS v4) · languages Hindi + English
-- **Workspace constraint**: one state only, so the five phases (open, discover, objection, pre-sales, close)
-  are sections of one prompt; pre-sales is gated by the `flag_sales_ready` tool and the `sales_stage` variable.
-- **Per-call variables** (from `/context/{glid}/variables`): glid, seller_name, seller_md, persona, playbook, hook
-- **Written by tools mid-call**: live_instruction (set_persona), sales_stage (flag_sales_ready)
-- **Extracted after the call**: call_outcome (enum), sales_ready, main_objection, callback_time
-- **API tools** → `PUBLIC_URL/tools/*` with header `x-tool-key`: set_persona, flag_sales_ready, get_demand_pitch,
-  book_callback, flag_risk. The service refuses tunnel traffic to anything except `/tools/*` and `/calls/ingest`.
-- **Goal**: call_outcome in {meeting_booked, proposal_sent, callback_booked}
-- **Voicemail** and silence nudge configured; max call 10 minutes.
+- **Female**: `IndiaMART Seller Growth Call` · `IndiaMART-S-31ca33eb-e1ce` · voice Sarika · agent_name Sarika
+- **Male**: `IndiaMART Seller Growth Call - Rahul` · `IndiaMART-S-8c69b7be-a89a` · voice Aditya (Sales Agent) · agent_name Rahul
+- Same prompt and tools on both. `service/voices.py` picks the voice per seller from results (50/50 until 5 audited
+  calls per voice in a state + category segment, then the better voice, 20% kept for re-checking). `GET /route/{glid}`.
+- **Deployed prompt**: `agent/sarvam_prompt.md`; `sarvam_prompt_v3.md` is the previous flow.
+- **Workspace constraint**: one state only; the flow is sections of one prompt.
 
-## First loop on the platform (9 Oct, text test)
-1. Test conversation as an engaged seller: `flag_sales_ready` and `get_demand_pitch` reached our service; the seller
-   agreed to Thursday 5 pm.
-2. Audit graded it **Fatal**: the bot called `book_callback` in the same turn as `end_interaction`; the platform ran
-   only the end, so no booking was made although the bot said it was.
-3. Fix: rule "Booking before closing" in the prompt. Re-test: callback reached the queue.
-4. Second finding: the bot voiced "5.2 Cr" as "saadhe paanch crore". Fix at the source: the pitch tool now returns
-   speech-safe amounts ("5 crore 21 lakh").
+## v4 flow (female agent version 5, male version 2)
+identify → hook (buyers who want his product in his city) → discovery (≤2) → `assess_engagement`
+(server scores: asked_question +2, detailed_answers +2, shared_pain +1, positive_tone +1, one_word_answers −1,
+burned_before −1, busy_or_irritated −3; presales at ≥3 and not busy; asking price = presales) →
+meeting_only: fix day/time/place · presales: "do minute aur?" → explain (no price) → WhatsApp proposal line → fix meeting
+→ book_callback → "Aapka samay dene ke liye dhanyavaad, aapke dhande mein khoob tarakki ho!"
 
-The tunnel URL in the tools is a Cloudflare quick tunnel and changes on restart; re-point the five tools when it does.
+Per-call variables: glid, seller_name, agent_name, greeting (by PIN-code state), city, product, meeting_place,
+seller_md (+ remembered facts), persona, playbook, category_playbook, hook. Written mid-call: live_instruction, sales_path.
+
+## Company rules the audit checks
+`audit/grade.py` POLICY: never quote a plan price on the call, never use IndiaMART jargon (BuyLead, TrustSEAL),
+never ask how the seller will pay. Breaking one is Fatal; each broken rule is its own problem, fix and replay.
+`python3 audit/demo_reset.py` starts a clean round (backs up the database first).
+
+Tunnel URL in the tools is a Cloudflare quick tunnel and changes on restart; re-point the tools when it does.

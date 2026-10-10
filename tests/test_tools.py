@@ -55,3 +55,17 @@ def test_sales_ready_does_not_pass_a_zero_pitch(tmp_db):
     _seed_ctx(tmp_db, "98", demand=ZERO)
     r = tools.flag_sales_ready("98", "c", "asked price", 0.9)
     assert r["state"] == "presales" and "pitch" not in r and r["available"] is False
+
+
+def test_engagement_presales_at_threshold(tmp_db):
+    r = tools.assess_engagement("1", "c", ["asked_question", "shared_pain"])
+    assert r["sales_path"] == "presales" and r["score"] == 3
+
+
+def test_engagement_busy_blocks_presales(tmp_db):
+    r = tools.assess_engagement("1", "c", ["asked_question", "detailed_answers", "busy_or_irritated"], asked_price=True)
+    assert r["sales_path"] == "meeting_only"
+
+
+def test_engagement_asked_price_shortcut(tmp_db):
+    assert tools.assess_engagement("1", "c", [], asked_price=True)["sales_path"] == "presales"

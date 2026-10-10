@@ -20,6 +20,7 @@ import context   # noqa: E402
 import sarvam    # noqa: E402
 import store     # noqa: E402
 import tools     # noqa: E402
+import voices    # noqa: E402
 import cluster as cl       # noqa: E402
 import experiment as ex    # noqa: E402
 import fix as fx           # noqa: E402
@@ -134,6 +135,24 @@ async def t_risk(req: Request):
                        lambda b: tools.flag_risk(b.get("glid"), b.get("call_id"), b.get("kind", ""), b.get("note", "")))
 
 
+@app.post("/tools/assess_engagement")
+async def t_engage(req: Request):
+    def h(b):
+        sig = b.get("signals") or []
+        if isinstance(sig, str):
+            sig = [x.strip() for x in sig.replace(";", ",").split(",") if x.strip()]
+        ap = b.get("asked_price")
+        return tools.assess_engagement(b.get("glid"), b.get("call_id"), sig,
+                                       ap is True or str(ap).lower() in ("true", "yes", "1"))
+    return await _tool(req, "assess_engagement", h)
+
+
+@app.get("/route/{glid}")
+def route(glid: str):
+    """Which voice agent should call this seller, and why."""
+    return voices.choose(glid)
+
+
 @app.get("/tools/definitions")
 def t_defs():
     return sarvam.tool_definitions(config.PUBLIC_URL)
@@ -152,7 +171,10 @@ async def ingest(req: Request):
     store.run("INSERT OR REPLACE INTO call VALUES (?,?,?,?,?,?,?,?,?,?)",
               (cid, str(b.get("glid") or (old or {}).get("glid") or ""), (old or {}).get("source") or "live",
                (old or {}).get("started") or store.now(), b.get("duration"), t, b.get("recording_url"),
-               (old or {}).get("variant") or "A", (old or {}).get("meta") or "{}", store.now()))
+               (old or {}).get("variant") or "A",
+               store.J({**store.L((old or {}).get("meta") or "{}", {}),
+                        **{k: b[k] for k in ("voice", "agent_id", "agent_version", "sarvam_id") if b.get(k)}}),
+               store.now()))
 
     def audit_one():
         j = gr.grade(cid, t)
@@ -252,7 +274,9 @@ def _card(f):
     """Everything one approval card shows, already reduced to what a person reads."""
     m = store.L(f["rationale"], {})
     rc = store.one("SELECT * FROM root_cause WHERE id=?", (f["cause_id"],)) or {}
-    ex_row = store.one("SELECT reason FROM audit WHERE cause_id=? AND reason LIKE '%—%' LIMIT 1", (f["cause_id"],))
+    first = (store.L(rc.get("examples")) or [None])[0]
+    ex_row = (store.one("SELECT reason FROM audit WHERE call_id=? AND reason LIKE '%—%'", (first,))
+              or store.one("SELECT reason FROM audit WHERE cause_id=? AND reason LIKE '%—%' LIMIT 1", (f["cause_id"],)))
     quote = ""
     if ex_row and '"' in ex_row["reason"]:
         quote = ex_row["reason"].split('"', 1)[1].rsplit('"', 1)[0][:180]
