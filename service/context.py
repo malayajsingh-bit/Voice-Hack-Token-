@@ -128,17 +128,22 @@ def build(glid, force=False):
     raw = load_raw(glid)
     md = seller_md(raw)
     demand = demand_pitch(raw)
+    persona_failed = False
     try:
         persona, _ = llm.chat_json([{"role": "user", "content": PERSONA_PROMPT.format(
             raw=json.dumps({k: v for k, v in raw.items() if k not in ("demand",)}, ensure_ascii=False)[:6000])}],
             config.FIX_MODEL, max_tokens=3000, label="persona: ")
     except Exception as e:
+        persona_failed = True
         persona = {"language": "hinglish-hindi-leaning", "formality": "respectful-informal", "pace": "medium",
                    "warmth": "high", "voice": {"gender": "female", "accent": "neutral"},
                    "opening": f"Namaste, {raw.get('company_name')} se baat ho rahi hai?", "playbook": {},
                    "avoid": [], "why": f"default persona ({str(e)[:80]})"}
-    store.run("INSERT OR REPLACE INTO seller_ctx VALUES (?,?,?,?,?,?)",
-              (str(glid), md, store.J(persona), store.J(demand), store.J(raw), store.now()))
+    # Only cache if the persona was actually built: a transient LLM error used to
+    # bake the default persona in forever (see issue #10 in HANDOFF.md).
+    if not persona_failed:
+        store.run("INSERT OR REPLACE INTO seller_ctx VALUES (?,?,?,?,?,?)",
+                  (str(glid), md, store.J(persona), store.J(demand), store.J(raw), store.now()))
     return {"glid": str(glid), "seller_md": md, "persona": persona, "demand": demand, "built_at": store.now()}
 
 

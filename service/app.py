@@ -35,14 +35,36 @@ TOOL_KEY = config._env("TOOL_KEY")
 async def _guard(request, call_next):
     """Requests arriving through the public tunnel carry cf-connecting-ip. They may reach
     only the in-call tools and the post-call webhook, and only with the shared key.
+    Sarvam's webhook_config carries no custom header, so the webhook authenticates with
+    ?k=<TOOL_KEY> in the URL; the in-call tools authenticate with x-tool-key as before.
     Everything else (dashboard, approve, promote) stays local."""
     if request.headers.get("cf-connecting-ip"):
         p = request.url.path
         if not (p.startswith("/tools/") or p == "/calls/ingest"):
             return JSONResponse({"error": "not available remotely"}, status_code=403)
-        if TOOL_KEY and request.headers.get("x-tool-key") != TOOL_KEY:
-            return JSONResponse({"error": "bad key"}, status_code=401)
+        if TOOL_KEY:
+            key = request.headers.get("x-tool-key") or request.query_params.get("k")
+            if key != TOOL_KEY:
+                return JSONResponse({"error": "bad key"}, status_code=401)
     return await call_next(request)
+
+
+async def _tool(req: Request, name: str, handler):
+    """Wraps a /tools/* handler so every request and response is persisted per call.
+    The model fills call_id/glid from agent_variables; we never trust it to log."""
+    b = await req.json()
+    cid = str(b.get("call_id") or "")
+    glid = str(b.get("glid") or "")
+    status, resp = "ok", None
+    try:
+        resp = handler(b)
+        return resp
+    except Exception as e:
+        status, resp = "error", {"error": str(e)[:200]}
+        raise
+    finally:
+        store.run("INSERT INTO tool_log VALUES (?,?,?,?,?,?,?,?)",
+                  (store.nid(), cid, glid, name, store.J(b), store.J(resp), status, store.now()))
 
 
 # ------------------------------------------------------------ pre-call -----
@@ -63,57 +85,62 @@ async def start_call(req: Request):
     v = context.variables(glid)
     exp = store.one("SELECT id FROM experiment WHERE decision IS NULL ORDER BY started DESC")
     variant = ex.assign(exp["id"]) if exp else "A"
-    if variant == "B":
-        v["prompt_override"] = store.L(store.one("SELECT rationale FROM fix WHERE id=(SELECT fix_id FROM experiment WHERE id=?)",
-                                                 (exp["id"],))["rationale"], {}).get("new_prompt")
+    cid = store.nid()                                       # our id, generated before dialling
+    v["call_id"] = cid
+    v["variant"] = variant
     try:
         r = sarvam.start_call(phone, v)
-        cid = str(r.get("call_id") or r.get("id"))
+        attempt_id = str(r.get("attempt_id") or r.get("call_id") or r.get("id") or "")
     except Exception as e:
-        cid = "dry-" + store.nid()
+        attempt_id = ""
         r = {"dry_run": True, "error": str(e)[:200]}
+        cid = "dry-" + cid
     store.run("INSERT OR REPLACE INTO call VALUES (?,?,?,?,?,?,?,?,?,?)",
               (cid, glid, "live", store.now(), None, "", None, variant,
-               store.J({"experiment": exp["id"] if exp else None, "variables": v}), store.now()))
-    return {"call_id": cid, "variant": variant, "variables": v, "sarvam": r}
+               store.J({"experiment": exp["id"] if exp else None, "variables": v,
+                        "attempt_id": attempt_id, "sarvam_response": r}), store.now()))
+    if attempt_id:
+        store.run("INSERT OR REPLACE INTO interaction_map VALUES (?,?,?)", (attempt_id, cid, store.now()))
+    return {"call_id": cid, "attempt_id": attempt_id, "variant": variant, "variables": v, "sarvam": r}
 
 
 # ------------------------------------------------------------ in-call ------
+# Every /tools/* answer is logged by _tool so the audit can diff spoken numbers vs
+# what the tool returned. Handlers read cached data only — no LLM, no network.
 @app.post("/tools/get_seller_context")
 async def t_ctx(req: Request):
-    b = await req.json()
-    c = context.build(str(b.get("glid")))
-    return {"seller_md": c["seller_md"], "persona": c["persona"], "hook": c["demand"]["line"]}
+    return await _tool(req, "get_seller_context", lambda b: tools.get_seller_context(b.get("glid")))
 
 
 @app.post("/tools/set_persona")
 async def t_persona(req: Request):
-    b = await req.json()
-    return tools.set_persona(b.get("glid"), b.get("call_id"), b.get("signal"), b.get("note", ""))
+    return await _tool(req, "set_persona",
+                       lambda b: tools.set_persona(b.get("glid"), b.get("call_id"), b.get("signal"), b.get("note", "")))
 
 
 @app.post("/tools/flag_sales_ready")
 async def t_sales(req: Request):
-    b = await req.json()
-    return tools.flag_sales_ready(b.get("glid"), b.get("call_id"), b.get("reason", ""), b.get("confidence", 0.7))
+    return await _tool(req, "flag_sales_ready",
+                       lambda b: tools.flag_sales_ready(b.get("glid"), b.get("call_id"),
+                                                        b.get("reason", ""), b.get("confidence", 0.7)))
 
 
 @app.post("/tools/get_demand_pitch")
 async def t_pitch(req: Request):
-    b = await req.json()
-    return tools.get_demand_pitch(b.get("glid"))
+    return await _tool(req, "get_demand_pitch", lambda b: tools.get_demand_pitch(b.get("glid")))
 
 
 @app.post("/tools/book_callback")
 async def t_cb(req: Request):
-    b = await req.json()
-    return tools.book_callback(b.get("glid"), b.get("call_id"), b.get("when", ""), b.get("note", ""))
+    return await _tool(req, "book_callback",
+                       lambda b: tools.book_callback(b.get("glid"), b.get("call_id"),
+                                                     b.get("when", ""), b.get("note", "")))
 
 
 @app.post("/tools/flag_risk")
 async def t_risk(req: Request):
-    b = await req.json()
-    return tools.flag_risk(b.get("glid"), b.get("call_id"), b.get("kind", ""), b.get("note", ""))
+    return await _tool(req, "flag_risk",
+                       lambda b: tools.flag_risk(b.get("glid"), b.get("call_id"), b.get("kind", ""), b.get("note", "")))
 
 
 @app.get("/tools/definitions")
@@ -124,27 +151,45 @@ def t_defs():
 # ------------------------------------------------------------ post-call ----
 @app.post("/calls/ingest")
 async def ingest(req: Request):
-    """Sarvam post-call payload (or our own): {call_id, glid?, transcript, recording_url?, duration?}."""
+    """Accepts Sarvam's post-call payload or our own.
+    Sarvam shape (observed): {interaction_id, metadata:{glid, call_id}, ...} with no
+    transcript; we fetch the transcript from analytics and reuse sync.to_text.
+    Legacy/local shape: {call_id, glid?, transcript, recording_url?, duration?}."""
     b = await req.json()
-    cid = str(b.get("call_id") or b.get("id") or store.nid())
+    md = b.get("metadata") or {}
+    iid = str(b.get("interaction_id") or b.get("attempt_id") or "")
+    mapped = store.one("SELECT call_id FROM interaction_map WHERE interaction_id=?", (iid,)) if iid else None
+    cid = str(md.get("call_id") or b.get("call_id") or b.get("id")
+              or (mapped or {}).get("call_id") or store.nid())
+    glid = str(md.get("glid") or b.get("glid") or "")
     t = b.get("transcript") or ""
     if isinstance(t, list):      # [{role, text}] -> "Bot: ...\nSeller: ..."
         t = "\n".join(f"{x.get('role', '?').title()}: {x.get('text', '')}" for x in t)
+    if not t and iid:
+        try:
+            t = sy.to_text(sarvam.transcript(iid))
+        except Exception as e:
+            print(f"  ingest: transcript fetch failed for {iid}: {str(e)[:120]}")
+    if iid:
+        store.run("INSERT OR REPLACE INTO interaction_map VALUES (?,?,?)", (iid, cid, store.now()))
+
     old = store.one("SELECT * FROM call WHERE id=?", (cid,))
+    old_meta = store.L((old or {}).get("meta") or "{}", {})
+    new_meta = {**old_meta, "ingest": {"interaction_id": iid, "metadata": md,
+                                        "duration": b.get("duration"), "received_at": store.now()}}
     store.run("INSERT OR REPLACE INTO call VALUES (?,?,?,?,?,?,?,?,?,?)",
-              (cid, str(b.get("glid") or (old or {}).get("glid") or ""), (old or {}).get("source") or "live",
+              (cid, glid or (old or {}).get("glid") or "", (old or {}).get("source") or "live",
                (old or {}).get("started") or store.now(), b.get("duration"), t, b.get("recording_url"),
-               (old or {}).get("variant") or "A", (old or {}).get("meta") or "{}", store.now()))
+               (old or {}).get("variant") or "A", store.J(new_meta), store.now()))
 
     def audit_one():
         j = gr.grade(cid, t)
-        meta = store.L((old or {}).get("meta") or "{}", {})
-        if meta.get("experiment"):
+        if old_meta.get("experiment"):
             bad = j.get("grade") == "Fatal"
-            ex.record(meta["experiment"], (old or {}).get("variant") or "A", bad)
+            ex.record(old_meta["experiment"], (old or {}).get("variant") or "A", bad)
     if t:
         threading.Thread(target=audit_one, daemon=True).start()
-    return {"ok": True, "call_id": cid, "queued": bool(t)}
+    return {"ok": True, "call_id": cid, "interaction_id": iid, "queued": bool(t)}
 
 
 @app.post("/calls/{cid}/human_grade")
