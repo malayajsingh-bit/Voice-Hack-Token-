@@ -30,3 +30,15 @@ set_persona has not fired in any real call yet.
    confirmed only by an explicit yes; product corrections go to flag_risk(wrong_requirement).
 4. Close the integration gap: Sarvam webhook to /calls/ingest (or sync.py with a Conversations API key) and the
    dashboard promote button.
+
+## The loop, end to end on a real call (10 Oct, 14:39)
+- Problem (Level 1): "Bot ignores explicit objections and callback requests and keeps pitching", 4 failed calls.
+- Fix suggested by the system (Gemini 3.7 Flash): one guardrail rewritten so any callback request, busy, no or
+  disinterest halts all pitching. Replay test on the 4 failed calls: failing 100% → 50%.
+- Approved on the dashboard, pushed to Sarvam with the MCP, committed as agent version 2.
+- Re-test phone call: seller said "abhi busy hoon, baad mein call karna". The bot stopped pitching at once,
+  called set_persona(rushed) (first time on a real call), offered a one-minute version or a callback, booked
+  tomorrow 5 pm. Sarvam outcome: callback_booked. Audit: Non-Fatal, dispositions busy + scheduling.
+- Incident: the Cloudflare quick tunnel had expired, so the tool calls in this call did not reach our service.
+  New tunnel started, the five tools re-pointed, committed as agent version 3. Use a named tunnel or Cloud Run
+  for anything longer than a demo.
