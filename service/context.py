@@ -122,7 +122,7 @@ def product_of(raw):
 PERSONA_PROMPT = """You design the voice persona for ONE outbound sales call to an Indian MSME seller.
 Decide from the seller data only; be specific; one choice per field.
 Rules for every line you write: no first-person verbs that show the caller's gender (the same persona is
-used by a female and a male voice); never claim a number that is not in the data. Company rules (what may be
+used by a female and a male voice); never claim a number that is not in the data; never the words BuyLead or BuyLeads (say buyers who want his product). Company rules (what may be
 said about price, which words to use) live in the agent prompt, not here.
 
 SELLER DATA:
