@@ -40,6 +40,10 @@ def ids():
 
 def start_call(phone, variables, webhook_url=None, initial_state=None, language="Hindi"):
     i = ids()
+    tk = config._env("TOOL_KEY")
+    wh = webhook_url or f"{config.PUBLIC_URL}/calls/ingest"
+    if tk and "k=" not in wh:
+        wh = wh + ("&" if "?" in wh else "?") + f"k={tk}"
     body = {"app_config": {"app_id": i["SARVAM_APP_ID"], "app_version": int(i["SARVAM_APP_VERSION"]),
                            "connection_config": {"connection_id": i["SARVAM_CONNECTION_ID"],
                                                  "agent_phone_number": i["SARVAM_AGENT_PHONE"]},
@@ -48,8 +52,8 @@ def start_call(phone, variables, webhook_url=None, initial_state=None, language=
                            "app_overrides": {k: v for k, v in {"initial_state_name": initial_state,
                                                                 "initial_language_name": language}.items() if v}},
             "user_config": {"user_phone_number": phone},
-            "webhook_config": {"url": webhook_url or f"{config.PUBLIC_URL}/calls/ingest",
-                               "metadata": {"glid": variables.get("glid")}}}
+            "webhook_config": {"url": wh,
+                               "metadata": {"glid": variables.get("glid"), "call_id": variables.get("call_id")}}}
     r = requests.post(f"{BASE}/outbounds/v1/orgs/{i['SARVAM_ORG_ID']}/workspaces/{i['SARVAM_WORKSPACE_ID']}/outbounds",
                       headers=H(), json=body, timeout=30)
     r.raise_for_status()

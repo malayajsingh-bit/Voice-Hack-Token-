@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, kind TEXT, call_id TEXT, 
   payload TEXT, created TEXT, handled_by TEXT);
 CREATE TABLE IF NOT EXISTS prompt_version (id TEXT PRIMARY KEY, version INTEGER, prompt TEXT, fix_id TEXT,
   created TEXT, active INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS tool_log (id TEXT PRIMARY KEY, call_id TEXT, glid TEXT, tool TEXT,
+  request TEXT, response TEXT, status TEXT, created TEXT);
+CREATE INDEX IF NOT EXISTS tool_log_call_idx ON tool_log(call_id);
+CREATE TABLE IF NOT EXISTS interaction_map (interaction_id TEXT PRIMARY KEY, call_id TEXT, created TEXT);
 """
 
 
